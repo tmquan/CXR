@@ -156,7 +156,7 @@ class Chexpert(RNGDataFlow):
             
             # label[label==-1.0] = np.random.normal(len(label==-1.0))     # uncertainty
             # label[label==-2.0] = np.random.uniform(len(label==-2.0))    # unmentioned
-            yield [image,label]
+            yield [image, label]
 
 
 
