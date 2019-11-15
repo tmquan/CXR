@@ -4,7 +4,7 @@ import tensorflow as tf
 
 from tensorpack import *
 from tensorpack.dataflow import dataset
-from tensorpack.tfutils.summary import add_moving_summary, add_param_summary
+from tensorpack.tfutils.summary import add_moving_summary, add_param_summary, add_tensor_summary
 from tensorpack.utils.gpu import get_num_gpu
 
 import tensornets as tn
@@ -17,6 +17,7 @@ To train:
 
 BATCH = 128
 SHAPE = 320
+GROUP = 14
 
 def visualize_tensors(name, imgs, scale_func=lambda x: (x + 1.) * 128., max_outputs=1):
     """Generate tensor for TensorBoard (casting, clipping)
@@ -33,9 +34,10 @@ def visualize_tensors(name, imgs, scale_func=lambda x: (x + 1.) * 128., max_outp
     tf.summary.image(name, xy, max_outputs=30)
 
 class Model(ModelDesc):
-    def __init__(self, name='ResNet50'):
+    def __init__(self, name='ResNet50', mode='small'):
         super(Model, self).__init__()
         self.name = name
+        self.mode = mode
         if self.name=='ResNet50':
             net = tn.ResNet50
         elif self.name=='ResNet101':
@@ -46,31 +48,37 @@ class Model(ModelDesc):
             pass
 
     def inputs(self):
-        return [tf.TensorSpec([None, SHAPE, SHAPE, 1], tf.float32, 'image'),
-                tf.TensorSpec([None, 14], tf.float32, 'label')]
+        if self.mode== 'space_to_depth':
+            return [tf.TensorSpec([None, 3072, 3072, 1], tf.float32, 'image'),
+                    tf.TensorSpec([None, GROUP], tf.float32, 'label')]
+        else:
+            return [tf.TensorSpec([None, SHAPE, SHAPE, 1], tf.float32, 'image'),
+                    tf.TensorSpec([None, GROUP], tf.float32, 'label')]
+        
 
     def build_graph(self, image, label):
-        image = image / 128.0
+        if self.mode== 'space_to_depth':
+            image = tf.space_to_depth(image, SHAPE)
+
+        image = image / 128.0 - 1
         assert tf.test.is_gpu_available()
         
         logit = tn.ResNet50(image, stem=True)
         logit = tf.reduce_mean(logit, [1, 2], name='avgpool')
-        logit = FullyConnected('fc', logit, 14, activation='sigmoid')
-        
-        def dice_loss(y_pred, y_true):
-            num = 2 * tf.reduce_sum(y_true * y_pred, axis=-1)
-            den = tf.reduce_sum(y_true + y_pred, axis=-1)
+        logit = FullyConnected('fc', logit, GROUP, activation='sigmoid')
+        logit = tf.identity(logit, name='logit')
+        def dice_loss(predictions, labels):
+            num = 2 * tf.reduce_sum(labels * predictions, axis=-1)
+            den = tf.reduce_sum(labels + predictions, axis=-1)
 
             return 1 - (num) / (den + 1e-6)
-        cost = tf.reduce_mean(dice_loss(logit, label), name='cost')
-        auc, auc_update_op = tf.metrics.auc( predictions=logit, labels=label, curve = 'ROC' )
-        auc_variables = [ v for v in tf.local_variables() if v.name.startswith( "AUC" ) ]
-
-        # cost = 1.0 - tf.contrib.metrics.streaming_auc(tf.squeeze(label), tf.squeeze(logit))
-        # tf.nn.sigmoid(logits, name='output')
-
-        # cost = tf.nn.sparse_softmax_cross_entropy_with_logits(logits=logits, labels=label)
-        # cost = tf.reduce_mean(cost, name='cross_entropy_loss')
+        loss = tf.reduce_mean(dice_loss(predictions=logit, labels=label), name='loss')
+        auc, update_op = tf.metrics.auc(predictions=logit, labels=label) 
+        auc_variables = [ v for v in tf.local_variables() if v.name.startswith( "auc" ) ]
+        auc_reset_op = tf.initialize_variables( auc_variables )
+     
+        # loss = tf.nn.sparse_softmax_cross_entropy_with_logits(logits=logits, labels=label)
+        # loss = tf.reduce_mean(loss, name='cross_entropy_loss')
 
         # wrong = tf.cast(tf.logical_not(tf.nn.in_top_k(logits, label, 1)), tf.float32, name='wrong_vector')
         # monitor training error
@@ -79,18 +87,17 @@ class Model(ModelDesc):
         # weight decay on all W of fc layers
         wd_w = tf.train.exponential_decay(0.0002, get_global_step_var(),
                                           500000, 0.2, True)
-        wd_cost = tf.multiply(wd_w, regularize_cost('.*/W', tf.nn.l2_loss), name='wd_cost') 
-        add_moving_summary(cost)
-        add_moving_summary(wd_cost)
-        # add_moving_summary(auc_variables)
-        [ add_moving_summary(v) for v in tf.local_variables() if v.name.startswith( "AUC" ) ]
-
+        wd_loss = tf.multiply(wd_w, regularize_cost('.*/W', tf.nn.l2_loss), name='wd_loss') 
+        add_moving_summary(auc)
+        add_moving_summary(update_op)
+        add_moving_summary(loss)
+        add_moving_summary(wd_loss)
 
         # Visualization
         add_param_summary(('.*/W', ['histogram']))   # monitor W
-        visualize_tensors('image', [image], max_outputs=max(64, BATCH), scale_func=lambda x: (x) * 255)
-        return tf.add_n([cost, wd_cost], name='cost')
-        # return cost
+        visualize_tensors('image', [image], max_outputs=max(64, BATCH))
+        cost = tf.add_n([loss, wd_loss], name='cost')
+        return cost
 
     def optimizer(self):
         lr = tf.get_variable('learning_rate', initializer=0.01, trainable=False)
@@ -98,36 +105,26 @@ class Model(ModelDesc):
         return opt
 
 
-def get_data(folder='/u01/data/CheXpert-v1.0-small'):
+def get_data(folder='/u01/data/CheXpert-v1.0-small', mode='small', group=14, debug=False):
+    if mode=='small':
+        _shape = SHAPE
+    else:
+        _shape = 1024*3
     ds_train = Chexpert(folder=folder, 
         train_or_valid='train',
-        resize=2*SHAPE,
+        group=group,
+        resize=int(1.05*_shape),
+        debug=debug
         )
     
     
     ds_valid = Chexpert(folder=folder, 
         train_or_valid='valid',
-        resize=2*SHAPE,
+        group=group,
+        resize=int(1.05*_shape),
+        debug=debug
         )
-   
-    # aug_train_image = [
-    #     imgaug.CenterPaste((SHAPE*1.12, SHAPE*1.12)),
-    #     imgaug.RandomCrop((SHAPE, SHAPE)),
-    #     # imgaug.MapImage(lambda x: x - pp_mean),
-    # ]
-    # aug_train_label = [
-    #     imgaug.MapImage(lambda x: x[x==-1.0] = np.random.normal(len(x==-1.0))), # uncertainty
-    #     imgaug.MapImage(lambda x: x[x==-2.0] = np.random.uniform(len(x==-2.0))) # unmentioned
-    # ]
-
-
-    # aug_valid_image = [
-    #     imgaug.MapImage(lambda x: x - pp_mean)
-    # ]
-
-    # ds_train = AugmentImageComponent(ds_train, aug_train_image, 0)
-    # ds_valid = AugmentImageComponent(ds_valid, aug_valid_image, 0)
-
+ 
     return ds_train, ds_valid
 
 def get_augmentation():
@@ -135,12 +132,13 @@ def get_augmentation():
         # It's OK to remove the following augs if your CPU is not fast enough.
         # Removing brightness/contrast/saturation does not have a significant effect on accuracy.
         # Removing lighting leads to a tiny drop in accuracy.
-        imgaug.ColorSpace(mode=cv2.COLOR_GRAY2RGB), 
+        # imgaug.Resize((SHAPE*1.12, SHAPE*1.12)),
         # imgaug.ToUint8(),
-        imgaug.RotationAndCropValid(max_deg=5,),
+        imgaug.ColorSpace(mode=cv2.COLOR_GRAY2RGB), 
+        imgaug.Rotation(max_deg=15,),
         # imgaug.ToUint8(),
 
-        # imgaug.Resize((SHAPE*1.12, SHAPE*1.12)),
+        
         imgaug.RandomOrderAug(
             [
                 imgaug.BrightnessScale((0.6, 1.4), clip=False),
@@ -157,7 +155,7 @@ def get_augmentation():
                                  dtype='float32')[::-1, ::-1]
                                 )
                 ]),
-        imgaug.ToUint8(),
+        # imgaug.ToUint8(),
         imgaug.GoogleNetRandomCropAndResize(interp=cv2.INTER_LINEAR, target_shape=SHAPE),
         # imgaug.ToUint8(),
         imgaug.ColorSpace(mode=cv2.COLOR_RGB2GRAY)
@@ -166,9 +164,9 @@ def get_augmentation():
     ]
 
     aug_valid = [
-        imgaug.ColorSpace(mode=cv2.COLOR_GRAY2RGB),
-        # imgaug.ToUint8(),
         # imgaug.Resize((SHAPE*1.12, SHAPE*1.12), interp=cv2.INTER_LINEAR),
+        # imgaug.ToUint8(),
+        imgaug.ColorSpace(mode=cv2.COLOR_GRAY2RGB),
         # imgaug.ToUint8(),
         imgaug.RandomCrop((SHAPE, SHAPE)),
         # imgaug.ToUint8(),
@@ -181,8 +179,11 @@ if __name__ == '__main__':
     parser.add_argument('--gpu', help='comma separated list of GPU(s) to use.')
     parser.add_argument('--load', help='load model')
     parser.add_argument('--data', help='Image directory')
-    parser.add_argument('--model', help='Model name', default='ResNet152')
-    parser.add_argument('--batch', type=int, default=128)
+    parser.add_argument('--mode', help='small | random_patch | space_to_depth', default='small')
+    parser.add_argument('--debug', help='Small size', action='store_true')
+    parser.add_argument('--model', help='Model name', default='ResNet50')
+    parser.add_argument('--group', type=int, default=14)
+    parser.add_argument('--batch', type=int, default=32)
     parser.add_argument('--shape', type=int, default=320)
     parser.add_argument('--sample', action='store_true', help='run sampling')
     
@@ -192,16 +193,15 @@ if __name__ == '__main__':
 
     BATCH = args.batch
     SHAPE = args.shape
+    GROUP = args.group
+    DEBUG = args.debug
 
     # logger.auto_set_dir()
-    logger.set_logger_dir(os.path.join('train_log', args.model), 'd')
+    logger.set_logger_dir(os.path.join('train_log', args.model, 'data_'+args.mode, 'shape_'+str(SHAPE), 'group_'+str(GROUP), ), 'd')
 
-    ds_train, ds_valid = get_data(folder=args.data)
+    ds_train, ds_valid = get_data(folder=args.data, group=GROUP, debug=DEBUG)
     ag_train, ag_valid = get_augmentation()
-
-    ds_train = PrintData(ds_train)
-    ds_valid = PrintData(ds_valid)
-
+   
     ds_train.reset_state()
     ds_valid.reset_state()
 
@@ -212,9 +212,10 @@ if __name__ == '__main__':
     ds_train = MultiProcessRunnerZMQ(ds_train, num_proc=8)
     
     ds_valid = BatchData(ds_valid, BATCH)
-    ds_valid = MultiProcessRunnerZMQ(ds_valid, num_proc=8)
+    ds_valid = MultiProcessRunnerZMQ(ds_valid, num_proc=1)
     
-
+    ds_train = PrintData(ds_train)
+    ds_valid = PrintData(ds_valid)
     
     model = Model(name=args.model)
     # ds_train = PrintData(ds_train)
@@ -222,12 +223,12 @@ if __name__ == '__main__':
         model=model,
         dataflow=ds_train,
         callbacks=[
-            PeriodicTrigger(ModelSaver(), every_k_epochs=100),
+            PeriodicTrigger(ModelSaver(), every_k_epochs=10),
             InferenceRunner(ds_valid,
-                            [   ScalarStats('cost'), 
-                                # ScalarStats('AUC*'), 
-                                # [ ScalarStats(v)  for v in tf.local_variables() if v.name.startswith( "AUC" )]
-                                # ClassificationError('wrong_vector')
+                            [   BinaryClassificationStats('logit', 'label'),
+                                ScalarStats('auc/value'), 
+                                ScalarStats('auc/update_op'), 
+                                ScalarStats('cost'), 
                              ]),
             ScheduledHyperParamSetter('learning_rate',
                                       [(1, 0.1), (100, 0.01), (200, 0.001), (300, 0.0002)])
