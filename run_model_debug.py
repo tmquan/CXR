@@ -8,7 +8,8 @@ from tensorpack.tfutils.summary import add_moving_summary, add_param_summary, ad
 from tensorpack.utils.gpu import get_num_gpu
 
 import tensornets as tn
-
+import sklearn
+from tensorlayer.cost import * #binary_cross_entropy, absolute_difference_error, dice_coe, cross_entropy
 from chexpert import *
 """
 To train:
@@ -18,6 +19,112 @@ To train:
 BATCH = 128
 SHAPE = 320
 GROUP = 14
+TRAIN = True
+class AUCStatistics(object):
+    """
+    Statistics for binary decision,
+    including precision, recall, false positive, false negative
+    """
+
+    def __init__(self):
+        self.reset()
+
+    def reset(self):
+        self.nr_pos = 0  # positive label
+        self.nr_neg = 0  # negative label
+        self.nr_pred_pos = 0
+        self.nr_pred_neg = 0
+        self.corr_pos = 0   # correct predict positive
+        self.corr_neg = 0   # correct predict negative
+        self.auc = 0
+
+    def feed(self, pred, label):
+        """
+        Args:
+            pred (np.ndarray): binary array.
+            label (np.ndarray): binary array of the same size.
+        """
+        assert pred.shape == label.shape, "{} != {}".format(pred.shape, label.shape)
+        self.nr_pos += (label == 1).sum()
+        self.nr_neg += (label == 0).sum()
+        self.nr_pred_pos += (pred == 1).sum()
+        self.nr_pred_neg += (pred == 0).sum()
+        self.corr_pos += ((pred == 1) & (pred == label)).sum()
+        self.corr_neg += ((pred == 0) & (pred == label)).sum()
+        try:
+            self.auc = sklearn.metrics.roc_auc_score(y_true=label, y_score=pred)
+        except:
+            self.auc = -1.0
+            pass
+
+    @property
+    def precision(self):
+        if self.nr_pred_pos == 0:
+            return 0
+        return self.corr_pos * 1. / self.nr_pred_pos
+
+    @property
+    def recall(self):
+        if self.nr_pos == 0:
+            return 0
+        return self.corr_pos * 1. / self.nr_pos
+
+    @property
+    def false_positive(self):
+        if self.nr_pred_pos == 0:
+            return 0
+        return 1 - self.precision
+
+    @property
+    def false_negative(self):
+        if self.nr_pos == 0:
+            return 0
+        return 1 - self.recall
+
+    @property
+    def roc(self):
+        return self.auc
+    
+
+class AUCStats(Inferencer):
+    """
+    Compute precision / recall in binary classification, given the
+    prediction vector and the label vector.
+    """
+
+    def __init__(self, pred_tensor_name, label_tensor_name, prefix='val'):
+        """
+        Args:
+            pred_tensor_name(str): name of the 0/1 prediction tensor.
+            label_tensor_name(str): name of the 0/1 label tensor.
+        """
+        self.pred_tensor_name = pred_tensor_name
+        self.label_tensor_name = label_tensor_name
+        self.prefix = prefix
+
+    def _before_inference(self):
+        self.stat = AUCStatistics()
+
+    def _get_fetches(self):
+        return [self.pred_tensor_name, self.label_tensor_name]
+
+    def _on_fetches(self, outputs):
+        pred, label = outputs
+        self.stat.feed(pred, label)
+
+    def _after_inference(self):
+        return {
+                self.prefix + '_nr_pos': self.stat.nr_pos,
+                self.prefix + '_nr_neg': self.stat.nr_neg,
+                self.prefix + '_nr_pred_pos': self.stat.nr_pred_pos,
+                self.prefix + '_nr_pred_neg': self.stat.nr_pred_neg,
+                self.prefix + '_corr_pos': self.stat.corr_pos,
+                self.prefix + '_corr_neg': self.stat.corr_neg,
+                self.prefix + '_precision': self.stat.precision,
+                self.prefix + '_recall': self.stat.recall, 
+                self.prefix + '_roc': self.stat.roc
+                }
+ 
 
 def visualize_tensors(name, imgs, scale_func=lambda x: (x + 1.) * 128., max_outputs=1):
     """Generate tensor for TensorBoard (casting, clipping)
@@ -33,6 +140,7 @@ def visualize_tensors(name, imgs, scale_func=lambda x: (x + 1.) * 128., max_outp
     xy = tf.cast(tf.clip_by_value(xy, 0, 255), tf.uint8, name='viz')
     tf.summary.image(name, xy, max_outputs=30)
 
+
 class Model(ModelDesc):
     def __init__(self, name='ResNet50', mode='small'):
         super(Model, self).__init__()
@@ -44,8 +152,25 @@ class Model(ModelDesc):
             self.net = tn.ResNet101
         elif self.name=='ResNet152':
             self.net = tn.ResNet152
+
+        if self.name=='ResNet50v2':
+            self.net = tn.ResNet50v2
+        elif self.name=='ResNet101v2':
+            self.net = tn.ResNet101v2
+        elif self.name=='ResNet152v2':
+            self.net = tn.ResNet152v2
+
+        if self.name=='ResNeXt50c32':
+            self.net = tn.ResNeXt50c32
+        elif self.name=='ResNeXt101c32':
+            self.net = tn.ResNeXt101c32
+        elif self.name=='ResNeXt101c64':
+            self.net = tn.ResNeXt101c64
+
         elif self.name=='DenseNet121':
             self.net = tn.DenseNet121
+        elif self.name=='DenseNet169':
+            self.net = tn.DenseNet169
         else:
             pass
 
@@ -62,52 +187,30 @@ class Model(ModelDesc):
         if self.mode== 'space_to_depth':
             image = tf.space_to_depth(image, SHAPE)
 
-        image = image / 128.0 - 1
+        image = image / 255.0
         assert tf.test.is_gpu_available()
         
-        with argscope([Conv2D, BatchNorm, GlobalAvgPooling], data_format='channels_first'), \
-                argscope(Conv2D, kernel_initializer=tf.variance_scaling_initializer(scale=1.0 / 3, mode='fan_in', distribution='uniform')):
-            logit = self.net(image, stem=True)
-            logit = tf.reduce_mean(logit, [1, 2], name='avgpool')
-            logit = FullyConnected('fc', logit, GROUP, activation='sigmoid',
-                                    kernel_initializer=tf.random_normal_initializer(stddev=1e-3))
-            logit = tf.identity(logit, name='logit')
+        # with argscope([Conv2D, BatchNorm, GlobalAvgPooling], data_format='channels_last'), \
+        #         argscope(Conv2D, kernel_initializer=tf.variance_scaling_initializer(scale=1.0 / 3, mode='fan_in', distribution='uniform')):
+        logit = self.net(image, stem=True, is_training=True)
+        logit = tf.reduce_mean(logit, [1, 2], name='avgpool')
+        # logit = FullyConnected('fc1', logit, 1024, activation='relu',
+        #                         kernel_initializer=tf.random_normal_initializer(stddev=1e-3))
+        # logit = FullyConnected('fc2', logit, 512, activation='relu',
+        #                         kernel_initializer=tf.random_normal_initializer(stddev=1e-3))
+        logit = FullyConnected('fc0', logit, GROUP, activation='sigmoid',
+                                kernel_initializer=tf.random_normal_initializer(stddev=1e-3))
+        logit = tf.identity(logit, name='logit')
 
-        # def dice_loss(predictions, labels, name='loss'):
-        #     num = 2 * tf.reduce_sum(labels * predictions, axis=-1)
-        #     den = tf.reduce_sum(labels + predictions, axis=-1)
-        #     loss = 1 - (num) / (den + 1e-6)
-        #     return tf.reduce_mean(loss, name=name)
-        def focal_loss(predictions, labels, alpha=0.25, gamma=2, name='loss'):
-            predictions = tf.clip_by_value(predictions, tf.keras.backend.epsilon(), 1 - tf.keras.backend.epsilon())
-            logits = tf.log(predictions / (1 - predictions))
-            def focal_loss_with_logits(logits, targets, alpha, gamma, predictions):
-                weight_a = alpha * (1 - predictions) ** gamma * targets
-                weight_b = (1 - alpha) * predictions ** gamma * (1 - targets)
-                
-                return (tf.log1p(tf.exp(-tf.abs(logits))) + tf.nn.relu(-logits)) * (weight_a + weight_b) + logits * weight_b 
-            loss = focal_loss_with_logits(logits=logits, targets=labels, alpha=alpha, gamma=gamma, predictions=predictions)
-            # or reduce_sum and/or axis=-1
-            return tf.reduce_mean(loss, name=name)
-
-        loss = focal_loss(predictions=logit, labels=label, name='loss')
-        auc, update_op = tf.metrics.auc(predictions=logit, labels=label) 
-        auc_variables = [ v for v in tf.local_variables() if v.name.startswith( "auc" ) ]
-        auc_reset_op = tf.initialize_variables( auc_variables )
-     
-        # loss = tf.nn.sparse_softmax_cross_entropy_with_logits(logits=logits, labels=label)
-        # loss = tf.reduce_mean(loss, name='cross_entropy_loss')
-
-        # wrong = tf.cast(tf.logical_not(tf.nn.in_top_k(logits, label, 1)), tf.float32, name='wrong_vector')
-        # monitor training error
-        # add_moving_summary(tf.reduce_mean(wrong, name='train_error'))
+        loss = tf.identity(1.0 - dice_coe(logit, label, axis=[0,1], loss_type='jaccard'), 
+                                 name='loss')  
+        # auc = roc_auc_score(logit, label)
 
         # weight decay on all W of fc layers
         wd_w = tf.train.exponential_decay(0.0002, get_global_step_var(),
                                           500000, 0.2, True)
         wd_loss = tf.multiply(wd_w, regularize_cost('.*/W', tf.nn.l2_loss), name='wd_loss') 
-        add_moving_summary(auc)
-        add_moving_summary(update_op)
+        # add_moving_summary(auc)
         add_moving_summary(loss)
         add_moving_summary(wd_loss)
 
@@ -153,7 +256,7 @@ def get_augmentation():
         # imgaug.Resize((SHAPE*1.12, SHAPE*1.12)),
         # imgaug.ToUint8(),
         imgaug.ColorSpace(mode=cv2.COLOR_GRAY2RGB), 
-        imgaug.RandomPaste((int(1.25*SHAPE), int(1.25*SHAPE))),
+        imgaug.RandomPaste((int(1.15*SHAPE), int(1.15*SHAPE))),
         imgaug.Rotation(max_deg=15,),
         # imgaug.ToUint8(),
 
@@ -205,6 +308,7 @@ if __name__ == '__main__':
     parser.add_argument('--group', type=int, default=14)
     parser.add_argument('--batch', type=int, default=32)
     parser.add_argument('--shape', type=int, default=320)
+    parser.add_argument('--train', action='store_true', help='train')
     parser.add_argument('--sample', action='store_true', help='run sampling')
     
     args = parser.parse_args()
@@ -215,9 +319,10 @@ if __name__ == '__main__':
     SHAPE = args.shape
     GROUP = args.group
     DEBUG = args.debug
+    TRAIN = args.train
 
     # logger.auto_set_dir()
-    logger.set_logger_dir(os.path.join('train_log', args.model, 'data_'+args.mode, 'shape_'+str(SHAPE), 'group_'+str(GROUP), ), 'd')
+    logger.set_logger_dir(os.path.join('train_log', args.model, 'data'+args.mode, 'shape'+str(SHAPE), 'group'+str(GROUP), ), 'd')
 
     ds_train, ds_valid = get_data(folder=args.data, group=GROUP, debug=DEBUG)
     ag_train, ag_valid = get_augmentation()
@@ -245,15 +350,12 @@ if __name__ == '__main__':
         callbacks=[
             PeriodicTrigger(ModelSaver(), every_k_epochs=10),
             InferenceRunner(ds_valid,
-                            [   BinaryClassificationStats('logit', 'label'),
-                                ScalarStats('auc/value'), 
-                                ScalarStats('auc/update_op'), 
-                                ScalarStats('cost'), 
+                            [   AUCStats('logit', 'label', prefix='valid'),
                              ]),
             ScheduledHyperParamSetter('learning_rate',
-                                      [(0, 0.1), (100, 0.01), (150, 0.001), (200, 0.0001)])
+                                      [(0, 0.1), (50, 0.01), (100, 0.001), (150, 0.0001)])
         ],
-        max_epoch=400,
+        max_epoch=200,
         session_init=SmartInit(args.load),
     )
 
