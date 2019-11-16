@@ -39,11 +39,13 @@ class Model(ModelDesc):
         self.name = name
         self.mode = mode
         if self.name=='ResNet50':
-            net = tn.ResNet50
+            self.net = tn.ResNet50
         elif self.name=='ResNet101':
-            net = tn.ResNet101
+            self.net = tn.ResNet101
         elif self.name=='ResNet152':
-            net = tn.ResNet152
+            self.net = tn.ResNet152
+        elif self.name=='DenseNet121':
+            self.net = tn.DenseNet121
         else:
             pass
 
@@ -63,16 +65,32 @@ class Model(ModelDesc):
         image = image / 128.0 - 1
         assert tf.test.is_gpu_available()
         
-        logit = tn.ResNet50(image, stem=True)
-        logit = tf.reduce_mean(logit, [1, 2], name='avgpool')
-        logit = FullyConnected('fc', logit, GROUP, activation='sigmoid')
-        logit = tf.identity(logit, name='logit')
-        def dice_loss(predictions, labels):
-            num = 2 * tf.reduce_sum(labels * predictions, axis=-1)
-            den = tf.reduce_sum(labels + predictions, axis=-1)
+        with argscope([Conv2D, BatchNorm, GlobalAvgPooling], data_format='channels_first'), \
+                argscope(Conv2D, kernel_initializer=tf.variance_scaling_initializer(scale=1.0 / 3, mode='fan_in', distribution='uniform')):
+            logit = self.net(image, stem=True)
+            logit = tf.reduce_mean(logit, [1, 2], name='avgpool')
+            logit = FullyConnected('fc', logit, GROUP, activation='sigmoid',
+                                    kernel_initializer=tf.random_normal_initializer(stddev=1e-3))
+            logit = tf.identity(logit, name='logit')
 
-            return 1 - (num) / (den + 1e-6)
-        loss = tf.reduce_mean(dice_loss(predictions=logit, labels=label), name='loss')
+        # def dice_loss(predictions, labels, name='loss'):
+        #     num = 2 * tf.reduce_sum(labels * predictions, axis=-1)
+        #     den = tf.reduce_sum(labels + predictions, axis=-1)
+        #     loss = 1 - (num) / (den + 1e-6)
+        #     return tf.reduce_mean(loss, name=name)
+        def focal_loss(predictions, labels, alpha=0.25, gamma=2, name='loss'):
+            predictions = tf.clip_by_value(predictions, tf.keras.backend.epsilon(), 1 - tf.keras.backend.epsilon())
+            logits = tf.log(predictions / (1 - predictions))
+            def focal_loss_with_logits(logits, targets, alpha, gamma, predictions):
+                weight_a = alpha * (1 - predictions) ** gamma * targets
+                weight_b = (1 - alpha) * predictions ** gamma * (1 - targets)
+                
+                return (tf.log1p(tf.exp(-tf.abs(logits))) + tf.nn.relu(-logits)) * (weight_a + weight_b) + logits * weight_b 
+            loss = focal_loss_with_logits(logits=logits, targets=labels, alpha=alpha, gamma=gamma, predictions=predictions)
+            # or reduce_sum and/or axis=-1
+            return tf.reduce_mean(loss, name=name)
+
+        loss = focal_loss(predictions=logit, labels=label, name='loss')
         auc, update_op = tf.metrics.auc(predictions=logit, labels=label) 
         auc_variables = [ v for v in tf.local_variables() if v.name.startswith( "auc" ) ]
         auc_reset_op = tf.initialize_variables( auc_variables )
@@ -113,7 +131,7 @@ def get_data(folder='/u01/data/CheXpert-v1.0-small', mode='small', group=14, deb
     ds_train = Chexpert(folder=folder, 
         train_or_valid='train',
         group=group,
-        resize=int(1.05*_shape),
+        resize=int(_shape),
         debug=debug
         )
     
@@ -121,7 +139,7 @@ def get_data(folder='/u01/data/CheXpert-v1.0-small', mode='small', group=14, deb
     ds_valid = Chexpert(folder=folder, 
         train_or_valid='valid',
         group=group,
-        resize=int(1.05*_shape),
+        resize=int(_shape),
         debug=debug
         )
  
@@ -135,6 +153,7 @@ def get_augmentation():
         # imgaug.Resize((SHAPE*1.12, SHAPE*1.12)),
         # imgaug.ToUint8(),
         imgaug.ColorSpace(mode=cv2.COLOR_GRAY2RGB), 
+        imgaug.RandomPaste((int(1.25*SHAPE), int(1.25*SHAPE))),
         imgaug.Rotation(max_deg=15,),
         # imgaug.ToUint8(),
 
@@ -156,17 +175,18 @@ def get_augmentation():
                                 )
                 ]),
         # imgaug.ToUint8(),
-        imgaug.GoogleNetRandomCropAndResize(interp=cv2.INTER_LINEAR, target_shape=SHAPE),
+        # imgaug.GoogleNetRandomCropAndResize(interp=cv2.INTER_LINEAR, target_shape=SHAPE),
         # imgaug.ToUint8(),
+        imgaug.RandomCrop((SHAPE, SHAPE)),
         imgaug.ColorSpace(mode=cv2.COLOR_RGB2GRAY)
         # imgaug.ToUint8(),
-        # imgaug.RandomCrop((SHAPE, SHAPE)),
     ]
 
     aug_valid = [
         # imgaug.Resize((SHAPE*1.12, SHAPE*1.12), interp=cv2.INTER_LINEAR),
         # imgaug.ToUint8(),
         imgaug.ColorSpace(mode=cv2.COLOR_GRAY2RGB),
+        imgaug.RandomPaste((int(1.15*SHAPE), int(1.15*SHAPE))),
         # imgaug.ToUint8(),
         imgaug.RandomCrop((SHAPE, SHAPE)),
         # imgaug.ToUint8(),
@@ -231,7 +251,7 @@ if __name__ == '__main__':
                                 ScalarStats('cost'), 
                              ]),
             ScheduledHyperParamSetter('learning_rate',
-                                      [(1, 0.1), (100, 0.01), (200, 0.001), (300, 0.0002)])
+                                      [(0, 0.1), (100, 0.01), (150, 0.001), (200, 0.0001)])
         ],
         max_epoch=400,
         session_init=SmartInit(args.load),
