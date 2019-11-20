@@ -23,7 +23,7 @@ import tensorflow as tf
 class Chexpert(RNGDataFlow):
     # https://github.com/tensorpack/tensorpack/blob/master/tensorpack/dataflow/image.py
     """ Produce images read from a list of files as (h, w, c) arrays. """
-    def __init__(self, folder, group=14, train_or_valid='train', channel=1, resize=None, debug=False, shuffle=False):
+    def __init__(self, folder, group=14, train_or_valid='train', channel=1, resize=None, debug=False, shuffle=False, fname="train.csv"):
         """
         
         """
@@ -42,7 +42,7 @@ class Chexpert(RNGDataFlow):
         self.debug = debug
         self.shuffle = shuffle
         self.small = True if "small" in self.folder else False
-        self.csvfile = os.path.join(self.folder, "train.csv") if self.is_train else os.path.join(self.folder, "valid.csv")
+        self.csvfile = os.path.join(self.folder, fname) 
         print(self.folder)
         # Read the csv
         self.df = pd.read_csv(self.csvfile)
@@ -125,7 +125,6 @@ class Chexpert(RNGDataFlow):
             self.rng.shuffle(indices)
         # if self.is_first:
         for idx in indices:
-        
             f = os.path.join(os.path.dirname(self.folder), self.df.iloc[idx]['Path']) # Get parent directory
             image = cv2.imread(f, self.imread_mode)
             assert image is not None, f

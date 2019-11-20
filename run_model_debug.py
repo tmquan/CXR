@@ -50,14 +50,14 @@ class AUCStatistics(object):
         pred_thresh = (pred > 0.5)*1 # Threshold
         label_thresh = (label > 0.5)*1 # Threshold
         # pred = (pred > 0.5)*1 # Threshold
-        # label = (label > 0.5)*1 # Threshold
+        label = (label > 0.5)*1 # Threshold
         self.shape = pred.shape
         self.nr_pos += (label == 1).sum()
         self.nr_neg += (label == 0).sum()
-        self.nr_pred_pos += (pred == 1).sum()
-        self.nr_pred_neg += (pred == 0).sum()
-        self.corr_pos += ((pred == 1) & (pred == label)).sum()
-        self.corr_neg += ((pred == 0) & (pred == label)).sum()
+        self.nr_pred_pos += (pred_thresh == 1).sum()
+        self.nr_pred_neg += (pred_thresh == 0).sum()
+        self.corr_pos += ((pred_thresh == 1) & (pred_thresh == label)).sum()
+        self.corr_neg += ((pred_thresh == 0) & (pred_thresh == label)).sum()
         try:
             self.auc = sklearn.metrics.roc_auc_score(y_true=label, y_score=pred)
             self.auc_thresh = sklearn.metrics.roc_auc_score(y_true=label_thresh, y_score=pred_thresh)
@@ -163,43 +163,16 @@ class Model(ModelDesc):
         super(Model, self).__init__()
         self.name = name
         self.mode = mode
-        if self.name=='ResNet50':
-            self.net = tn.ResNet50
-        elif self.name=='ResNet101':
-            self.net = tn.ResNet101
-        elif self.name=='ResNet152':
-            self.net = tn.ResNet152
-
-        if self.name=='ResNet50v2':
-            self.net = tn.ResNet50v2
-        elif self.name=='ResNet101v2':
-            self.net = tn.ResNet101v2
-        elif self.name=='ResNet152v2':
-            self.net = tn.ResNet152v2
-
-        if self.name=='ResNeXt50c32':
-            self.net = tn.ResNeXt50c32
-        elif self.name=='ResNeXt101c32':
-            self.net = tn.ResNeXt101c32
-        elif self.name=='ResNeXt101c64':
-            self.net = tn.ResNeXt101c64
-
-        elif self.name=='DenseNet121':
-            self.net = tn.DenseNet121
-        elif self.name=='DenseNet169':
-            self.net = tn.DenseNet169
-        else:
-            pass
 
     def inputs(self):
         if self.mode== 'space_to_depth':
-            return [tf.TensorSpec([None, 3072, 3072, 1], tf.float32, 'image'),
-                    tf.TensorSpec([None, GROUP], tf.float32, 'label'), 
-                    tf.TensorSpec([None, 320, 320, 1], tf.float32, 'fname'),]
+            return [tf.TensorSpec([None, 3072, 3072, 1], tf.uint8, 'image'),
+                    tf.TensorSpec([None, GROUP], tf.uint8, 'label'), 
+                    tf.TensorSpec([None, 320, 320, 1], tf.uint8, 'fname'),]
         else:
-            return [tf.TensorSpec([None, SHAPE, SHAPE, 1], tf.float32, 'image'),
-                    tf.TensorSpec([None, GROUP], tf.float32, 'label'), 
-                    tf.TensorSpec([None, SHAPE, SHAPE, 1], tf.float32, 'fname'),
+            return [tf.TensorSpec([None, SHAPE, SHAPE, 1], tf.uint8, 'image'),
+                    tf.TensorSpec([None, GROUP], tf.uint8, 'label'), 
+                    tf.TensorSpec([None, SHAPE, SHAPE, 1], tf.uint8, 'fname'),
                     ]
         
 
@@ -212,29 +185,23 @@ class Model(ModelDesc):
         image = image / 128.0 - 1.0
         fname = fname / 128.0 - 1.0
         assert tf.test.is_gpu_available()
-        
-        # with argscope([Conv2D, BatchNorm, GlobalAvgPooling], data_format='channels_last'), \
-        #         argscope(Conv2D, kernel_initializer=tf.variance_scaling_initializer(scale=1.0 / 3, mode='fan_in', distribution='uniform')):
-        with tf.variable_scope('Model'):
-            output = self.net(image, stem=True, is_training=True)
-            # if self.name=='ResNeXt50c32':
-            #     output = tn.ResNeXt50c32(image, stem=True, classes=GROUP, is_training=True)
-            # output = tf.reduce_mean(output, [1, 2], name='avgpool')
-            # output.print_outputs()
-            output = GlobalAvgPooling('gap', output)
-            output = FullyConnected('fc1', output, 1024, activation=BNLReLU,
-                                    kernel_initializer=tf.random_normal_initializer(stddev=1e-3))
-            output = FullyConnected('fc', output, 512, activation=BNLReLU,
-                                    kernel_initializer=tf.random_normal_initializer(stddev=1e-3))
-        linear = FullyConnected('linear', output, GROUP, activation=BNLReLU,
-                                    kernel_initializer=tf.random_normal_initializer(stddev=1e-3))
-
-        loss_xentropy = tf.losses.sigmoid_cross_entropy(label, linear, reduction=tf.losses.Reduction.NONE)
-        # loss_xentropy = tf.identity(loss_xentropy, name='loss_xentropy')
+        with tf.name_scope('cnn'):
+            if self.name=='ResNeXt50c32':
+                models = tn.ResNeXt50c32(image, is_training=True, classes=GROUP)
+            elif self.name=='ResNeXt101c32':
+                models = tn.ResNeXt101c32(image, is_training=True, classes=GROUP)
+            elif self.name=='DenseNet121':
+                models = tn.DenseNet121(image, is_training=True, classes=GROUP)
+            elif self.name=='DenseNet169':
+                models = tn.DenseNet169(image, is_training=True, classes=GROUP)
+            else:
+                pass
+            output = tf.identity(models.logits)
+        loss_xentropy = tf.losses.sigmoid_cross_entropy(label, output)
         loss_xentropy = tf.reduce_mean(loss_xentropy, name='loss_xentropy')
 
-        logit = tf.sigmoid(linear, name='logit')
-        def dice_coe(output, target, loss_type='jaccard', axis=(1, 2, 3), smooth=1e-5):
+        logit = tf.sigmoid(output, name='logit')
+        def dice_coe(output, target, loss_type='sorensen', axis=(1, 2, 3), smooth=1e-5):
             """Soft dice (Sørensen or Jaccard) coefficient for comparing the similarity
             of two batch of data, usually be used for binary image segmentation
             i.e. labels are binary. The coefficient between 0 to 1, 1 means totally match.
@@ -273,14 +240,14 @@ class Model(ModelDesc):
                 l = tf.reduce_sum(output, axis=axis)
                 r = tf.reduce_sum(target, axis=axis)
             else:
-                raise Exception("Unknow loss_type")
+                raise Exception("Unknown loss_type")
             
             dice = (2. * inse + smooth) / (l + r + smooth) # 1 minus
             ##
             dice = 1 - tf.reduce_mean(dice, name='dice_coe')
             return dice
 
-        loss_dice = tf.identity(dice_coe(logit, label, axis=(1), loss_type='jaccard'), name='loss_dice') 
+        loss_dice = tf.identity(dice_coe(logit, label, axis=(1), loss_type='sorensen'), name='loss_dice') 
         
         # # weight decay on all W of fc layers
         wd_w = tf.train.exponential_decay(0.0002, get_global_step_var(),
@@ -293,7 +260,7 @@ class Model(ModelDesc):
         # Visualization
         add_param_summary(('.*/W', ['histogram']))   # monitor W
         visualize_tensors('image', [image, fname], max_outputs=max(64, BATCH))
-        cost = tf.add_n([2*loss_xentropy, loss_dice, wd_loss], name='cost')
+        cost = tf.add_n([3*loss_xentropy, loss_dice, wd_loss], name='cost')
         return cost
 
     def optimizer(self):
@@ -332,7 +299,7 @@ def get_augmentation():
         # imgaug.Resize((SHAPE*1.12, SHAPE*1.12)),
         # imgaug.ToUint8(),
         imgaug.ColorSpace(mode=cv2.COLOR_GRAY2RGB), 
-        imgaug.RandomPaste((int(1.15*SHAPE), int(1.15*SHAPE))),
+        imgaug.RandomPaste((int(1.05*SHAPE), int(1.05*SHAPE))),
         imgaug.Rotation(max_deg=15,),
         # imgaug.ToUint8(),
 
@@ -354,9 +321,9 @@ def get_augmentation():
                                 )
                 ]),
         # imgaug.ToUint8(),
-        # imgaug.GoogleNetRandomCropAndResize(interp=cv2.INTER_LINEAR, target_shape=SHAPE),
+        imgaug.GoogleNetRandomCropAndResize(interp=cv2.INTER_LINEAR, target_shape=SHAPE),
         # imgaug.ToUint8(),
-        imgaug.RandomCrop((SHAPE, SHAPE)),
+        # imgaug.RandomCrop((SHAPE, SHAPE)),
         imgaug.ColorSpace(mode=cv2.COLOR_RGB2GRAY)
         # imgaug.ToUint8(),
     ]
@@ -365,7 +332,7 @@ def get_augmentation():
         # imgaug.Resize((SHAPE*1.12, SHAPE*1.12), interp=cv2.INTER_LINEAR),
         # imgaug.ToUint8(),
         imgaug.ColorSpace(mode=cv2.COLOR_GRAY2RGB),
-        imgaug.RandomPaste((int(1.15*SHAPE), int(1.15*SHAPE))),
+        imgaug.RandomPaste((int(1.05*SHAPE), int(1.05*SHAPE))),
         # imgaug.ToUint8(),
         imgaug.RandomCrop((SHAPE, SHAPE)),
         # imgaug.ToUint8(),
@@ -400,22 +367,112 @@ if __name__ == '__main__':
     # logger.auto_set_dir()
     logger.set_logger_dir(os.path.join('train_log', args.model, 'data'+args.mode, 'shape'+str(SHAPE), 'group'+str(GROUP), ), 'd')
 
-    ds_train, ds_valid = get_data(folder=args.data, group=GROUP, debug=DEBUG)
-    ag_train, ag_valid = get_augmentation()
+    # ds_train, ds_valid = get_data(folder=args.data, group=GROUP, debug=DEBUG)
+
+    ds_train = Chexpert(folder='/u01/data/CheXpert-v1.0-small', 
+        train_or_valid='train',
+        fname='train.csv',
+        group=GROUP,
+        resize=int(SHAPE),
+        debug=DEBUG
+        )
+    
+    
+    ds_valid = Chexpert(folder='/u01/data/CheXpert-v1.0-small', 
+        train_or_valid='valid',
+        fname='valid.csv',
+        group=GROUP,
+        resize=int(SHAPE),
+        debug=DEBUG
+        )
+
+    # ds_mimic = Chexpert(folder='/vinbrain/data/mimic_validation_data/', 
+    #     train_or_valid='mimic',
+    #     fname='mimic_valid.csv',
+    #     group=GROUP,
+    #     resize=int(SHAPE),
+    #     debug=DEBUG
+    #     )
+
+    # ag_train, ag_valid = get_augmentation()
+    ag_train = [
+        # It's OK to remove the following augs if your CPU is not fast enough.
+        # Removing brightness/contrast/saturation does not have a significant effect on accuracy.
+        # Removing lighting leads to a tiny drop in accuracy.
+        # imgaug.Resize((SHAPE*1.12, SHAPE*1.12)),
+        # imgaug.ToUint8(),
+        imgaug.ColorSpace(mode=cv2.COLOR_GRAY2RGB), 
+        imgaug.RandomPaste((int(1.05*SHAPE), int(1.05*SHAPE))),
+        imgaug.Rotation(max_deg=15,),
+        # imgaug.ToUint8(),
+
+        
+        imgaug.RandomOrderAug(
+            [
+                imgaug.BrightnessScale((0.6, 1.4), clip=False),
+                imgaug.Contrast((0.6, 1.4), rgb=False, clip=False),
+                imgaug.Saturation(0.4, rgb=False),
+                # rgb-bgr conversion for the constants copied from fb.resnet.torch
+                imgaug.Lighting(0.1,
+                                eigval=np.asarray(
+                                 [0.2175, 0.0188, 0.0045][::-1]) * 255.0,
+                                eigvec=np.array(
+                                 [[-0.5675, 0.7192, 0.4009],
+                                  [-0.5808, -0.0045, -0.8140],
+                                  [-0.5836, -0.6948, 0.4203]],
+                                 dtype='float32')[::-1, ::-1]
+                                )
+                ]),
+        # imgaug.ToUint8(),
+        imgaug.GoogleNetRandomCropAndResize(interp=cv2.INTER_LINEAR, target_shape=SHAPE),
+        # imgaug.ToUint8(),
+        # imgaug.RandomCrop((SHAPE, SHAPE)),
+        imgaug.ColorSpace(mode=cv2.COLOR_RGB2GRAY)
+        # imgaug.ToUint8(),
+    ]
+
+    ag_valid = [
+        # imgaug.Resize((SHAPE*1.12, SHAPE*1.12), interp=cv2.INTER_LINEAR),
+        # imgaug.ToUint8(),
+        imgaug.ColorSpace(mode=cv2.COLOR_GRAY2RGB),
+        imgaug.RandomPaste((int(1.05*SHAPE), int(1.05*SHAPE))),
+        # imgaug.ToUint8(),
+        imgaug.RandomCrop((SHAPE, SHAPE)),
+        # imgaug.ToUint8(),
+        imgaug.ColorSpace(mode=cv2.COLOR_RGB2GRAY)
+    ]
+
+    # ag_mimic = [
+    #     # imgaug.Resize((SHAPE*1.12, SHAPE*1.12), interp=cv2.INTER_LINEAR),
+    #     # imgaug.ToUint8(),
+    #     imgaug.ColorSpace(mode=cv2.COLOR_GRAY2RGB),
+    #     imgaug.RandomPaste((int(1.05*SHAPE), int(1.05*SHAPE))),
+    #     # imgaug.ToUint8(),
+    #     imgaug.RandomCrop((SHAPE, SHAPE)),
+    #     # imgaug.ToUint8(),
+    #     imgaug.ColorSpace(mode=cv2.COLOR_RGB2GRAY)
+    # ]
    
     ds_train.reset_state()
     ds_valid.reset_state()
+    # ds_mimic.reset_state()
 
     ds_train = AugmentImageComponent(ds_train, ag_train, 0)
     ds_valid = AugmentImageComponent(ds_valid, ag_valid, 0) 
+    # ds_mimic = AugmentImageComponent(ds_mimic, ag_mimic, 0) 
 
     ds_train = BatchData(ds_train, BATCH)
     ds_train = MultiProcessRunnerZMQ(ds_train, num_proc=8)
     
     ds_valid = BatchData(ds_valid, BATCH)
     # ds_valid = MultiProcessRunnerZMQ(ds_valid, num_proc=1)
+
+    # ds_mimic = BatchData(ds_mimic, BATCH)
+    # # ds_mimic = MultiProcessRunnerZMQ(ds_mimic, num_proc=1)
+
     ds_train = PrintData(ds_train)
     ds_valid = PrintData(ds_valid)
+    # ds_mimic = PrintData(ds_mimic)
     
     model = Model(name=args.model)
     # ds_train = PrintData(ds_train)
@@ -424,13 +481,22 @@ if __name__ == '__main__':
         dataflow=ds_train,
         callbacks=[
             PeriodicTrigger(ModelSaver(), every_k_epochs=10),
-            # InferenceRunner(ds_train,
-            #                 [AUCStats('logit', 'label', prefix='train'),]),
             InferenceRunner(ds_valid,
                             [ScalarStats('loss_dice'), ScalarStats('loss_xentropy'),
                             AUCStats('logit', 'label', prefix='valid'),]),
+            # InferenceRunner(ds_mimic,
+            #                 [ScalarStats('loss_dice'), ScalarStats('loss_xentropy'),
+            #                 AUCStats('logit', 'label', prefix='mimic'),]),
             ScheduledHyperParamSetter('learning_rate',
-                                      [(0, 1e-2), (50, 1e-3), (100, 1e-4), (150, 1e-5)])
+                                      [(0, 1e-2), (50, 1e-3), (100, 1e-4), (150, 1e-5)]),
+        ],
+        monitors=[        # monitors are a special kind of callbacks. these are also enabled by default
+            # write everything to tensorboard
+            TFEventWriter(),
+            # write all scalar data to a json file, for easy parsing
+            JSONWriter(),
+            # print all scalar data every epoch (can be configured differently)
+            ScalarPrinter(),
         ],
         max_epoch=200,
         session_init=SmartInit(args.load),
