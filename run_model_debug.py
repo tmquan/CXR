@@ -37,6 +37,7 @@ class AUCStatistics(object):
         self.corr_pos = 0   # correct predict positive
         self.corr_neg = 0   # correct predict negative
         self.auc = 0
+        self.auc_thresh = 0
         self.shape = [-1, -1]
 
     def feed(self, pred, label):
@@ -46,8 +47,10 @@ class AUCStatistics(object):
             label (np.ndarray): binary array of the same size.
         """
         assert pred.shape == label.shape, "{} != {}".format(pred.shape, label.shape)
-        pred = (pred > 0.5)*1 # Threshold
-        label = (label > 0.5)*1 # Threshold
+        pred_thresh = (pred > 0.5)*1 # Threshold
+        label_thresh = (label > 0.5)*1 # Threshold
+        # pred = (pred > 0.5)*1 # Threshold
+        # label = (label > 0.5)*1 # Threshold
         self.shape = pred.shape
         self.nr_pos += (label == 1).sum()
         self.nr_neg += (label == 0).sum()
@@ -57,8 +60,10 @@ class AUCStatistics(object):
         self.corr_neg += ((pred == 0) & (pred == label)).sum()
         try:
             self.auc = sklearn.metrics.roc_auc_score(y_true=label, y_score=pred)
+            self.auc_thresh = sklearn.metrics.roc_auc_score(y_true=label_thresh, y_score=pred_thresh)
         except:
             self.auc = -1.0
+            self.auc_thresh = -1.0
             pass
 
     @property
@@ -88,6 +93,10 @@ class AUCStatistics(object):
     @property
     def roc(self):
         return self.auc
+
+    @property
+    def roc_thresh(self):
+        return self.auc_thresh
     
 class AUCStats(Inferencer):
     """
@@ -127,7 +136,8 @@ class AUCStats(Inferencer):
                 self.prefix + '_corr_neg': self.stat.corr_neg,
                 self.prefix + '_precision': self.stat.precision,
                 self.prefix + '_recall': self.stat.recall, 
-                self.prefix + '_roc': self.stat.roc
+                self.prefix + '_roc': self.stat.roc,
+                self.prefix + '_roc_thresh': self.stat.roc_thresh
                 }
  
 def visualize_tensors(name, imgs, scale_func=lambda x: (x + 1.) * 128., max_outputs=1):
@@ -283,7 +293,7 @@ class Model(ModelDesc):
         # Visualization
         add_param_summary(('.*/W', ['histogram']))   # monitor W
         visualize_tensors('image', [image, fname], max_outputs=max(64, BATCH))
-        cost = tf.add_n([loss_xentropy, loss_dice, wd_loss], name='cost')
+        cost = tf.add_n([2*loss_xentropy, loss_dice, wd_loss], name='cost')
         return cost
 
     def optimizer(self):
