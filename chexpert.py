@@ -23,7 +23,7 @@ import tensorflow as tf
 class Chexpert(RNGDataFlow):
     # https://github.com/tensorpack/tensorpack/blob/master/tensorpack/dataflow/image.py
     """ Produce images read from a list of files as (h, w, c) arrays. """
-    def __init__(self, folder, group=14, train_or_valid='train', channel=1, resize=None, debug=False, shuffle=False):
+    def __init__(self, folder, group=14, train_or_valid='train', channel=1, resize=None, debug=False, shuffle=False, fname="train.csv"):
         """
         
         """
@@ -42,7 +42,7 @@ class Chexpert(RNGDataFlow):
         self.debug = debug
         self.shuffle = shuffle
         self.small = True if "small" in self.folder else False
-        self.csvfile = os.path.join(self.folder, "train.csv") if self.is_train else os.path.join(self.folder, "valid.csv")
+        self.csvfile = os.path.join(self.folder, fname) 
         print(self.folder)
         # Read the csv
         self.df = pd.read_csv(self.csvfile)
@@ -115,7 +115,7 @@ class Chexpert(RNGDataFlow):
 
     def __len__(self):
         if self.debug:
-            return 250
+            return 200
         else:
             return len(self.df)
 
@@ -125,8 +125,9 @@ class Chexpert(RNGDataFlow):
             self.rng.shuffle(indices)
         # if self.is_first:
         for idx in indices:
-        
             f = os.path.join(os.path.dirname(self.folder), self.df.iloc[idx]['Path']) # Get parent directory
+            # if not self.is_train:
+            #     print(f)
             image = cv2.imread(f, self.imread_mode)
             assert image is not None, f
             # print(f)
@@ -230,20 +231,20 @@ class Chexpert(RNGDataFlow):
             
             elif self.group==5:
                 # label.append(self.df.iloc[idx]['Cardiomegaly']) #2: -1 to 0
-                # label.append( (np.random.normal(loc=0.2) > 0.5)*1.0 if self.df.iloc[idx]['Cardiomegaly'] == -1.0 else self.df.iloc[idx]['Cardiomegaly'])
-                label.append( 0.0 if self.df.iloc[idx]['Cardiomegaly'] == -1.0 else self.df.iloc[idx]['Cardiomegaly'])
+                label.append( ((np.random.uniform()-0.25) > 0.5)*1.0 if self.df.iloc[idx]['Cardiomegaly'] == -1.0 else self.df.iloc[idx]['Cardiomegaly'])
+                # label.append( 0.0 if self.df.iloc[idx]['Cardiomegaly'] == -1.0 else self.df.iloc[idx]['Cardiomegaly'])
                 # label.append(self.df.iloc[idx]['Edema']) # 5: -1 to 1
-                # label.append( (np.random.normal(loc=0.8) > 0.5)*1.0 if self.df.iloc[idx]['Edema'] == -1.0 else self.df.iloc[idx]['Edema'])
-                label.append( 1.0 if self.df.iloc[idx]['Edema'] == -1.0 else self.df.iloc[idx]['Edema'])
+                label.append( ((np.random.uniform()+0.25) > 0.5)*1.0 if self.df.iloc[idx]['Edema'] == -1.0 else self.df.iloc[idx]['Edema'])
+                # label.append( 1.0 if self.df.iloc[idx]['Edema'] == -1.0 else self.df.iloc[idx]['Edema'])
                 # label.append(self.df.iloc[idx]['Consolidation']) #6 : -1 to 0
-                # label.append( (np.random.normal(loc=0.2) > 0.5)*1.0 if self.df.iloc[idx]['Consolidation'] == -1.0 else self.df.iloc[idx]['Consolidation'])
-                label.append( 0.0 if self.df.iloc[idx]['Consolidation'] == -1.0 else self.df.iloc[idx]['Consolidation'])
+                label.append( ((np.random.uniform()-0.25) > 0.5)*1.0 if self.df.iloc[idx]['Consolidation'] == -1.0 else self.df.iloc[idx]['Consolidation'])
+                # label.append( 0.0 if self.df.iloc[idx]['Consolidation'] == -1.0 else self.df.iloc[idx]['Consolidation'])
                 # label.append(self.df.iloc[idx]['Atelectasis']) # 8: -1 to 1
-                # label.append( (np.random.normal(loc=0.8) > 0.5)*1.0 if self.df.iloc[idx]['Atelectasis'] == -1.0 else self.df.iloc[idx]['Atelectasis'])
-                label.append( 1.0 if self.df.iloc[idx]['Atelectasis'] == -1.0 else self.df.iloc[idx]['Atelectasis'])
+                label.append( ((np.random.uniform()+0.25) > 0.5)*1.0 if self.df.iloc[idx]['Atelectasis'] == -1.0 else self.df.iloc[idx]['Atelectasis'])
+                # label.append( 1.0 if self.df.iloc[idx]['Atelectasis'] == -1.0 else self.df.iloc[idx]['Atelectasis'])
                 # label.append(self.df.iloc[idx]['Pleural Effusion']) # 10: -1 to 0
-                # label.append( (np.random.normal(loc=0.2) > 0.5)*1.0 if self.df.iloc[idx]['Pleural Effusion'] == -1.0 else self.df.iloc[idx]['Pleural Effusion'])
-                label.append( 0.0 if self.df.iloc[idx]['Pleural Effusion'] == -1.0 else self.df.iloc[idx]['Pleural Effusion'])
+                label.append( ((np.random.uniform()-0.25) > 0.5)*1.0 if self.df.iloc[idx]['Pleural Effusion'] == -1.0 else self.df.iloc[idx]['Pleural Effusion'])
+                # label.append( 0.0 if self.df.iloc[idx]['Pleural Effusion'] == -1.0 else self.df.iloc[idx]['Pleural Effusion'])
             
             label = np.nan_to_num(label, copy=True, nan=0)
             label = np.array(label, dtype = np.uint8)
@@ -257,23 +258,23 @@ class Chexpert(RNGDataFlow):
             # group = np.array(group, dtype = np.uint8)
 
             # Get filename and compare to the list
-            fname = np.zeros((320, 320, 3), dtype=np.uint8)
-            cv2.putText(
-                fname,
-                str(f.split('/')[-3:])+str(group),
-                (10, 10),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.30, #0.15 * image_scale,
-                (255, 255, 255), 
-                1, cv2.LINE_AA)
-            fname = cv2.cvtColor(fname, cv2.COLOR_RGB2GRAY)
-            if self.channel == 1:
-                fname = fname[:, :, np.newaxis]
+            # fname = np.zeros((320, 320, 3), dtype=np.uint8)
+            # cv2.putText(
+            #     fname,
+            #     str(f.split('/')[-3:])+str(group),
+            #     (10, 10),
+            #     cv2.FONT_HERSHEY_SIMPLEX,
+            #     0.30, #0.15 * image_scale,
+            #     (255, 255, 255), 
+            #     1, cv2.LINE_AA)
+            # fname = cv2.cvtColor(fname, cv2.COLOR_RGB2GRAY)
+            # if self.channel == 1:
+            #     fname = fname[:, :, np.newaxis]
 
             # 
             # image = image.astype(np.float32)
             # self.dataflow.append([image, group, fname])
-            yield [image, group, fname]
+            yield [image, group]
     #     self.is_first=False
 
     # else:
