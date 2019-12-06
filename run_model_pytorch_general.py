@@ -28,12 +28,14 @@ import torch.nn as nn
 import torch.nn.functional as F
 # import torch.nn.utils.weight_norm as weightNorm
 # import torch.optim as optim
+import torch.backends.cudnn as cudnn
 # from torch.autograd import Variable
 # from torch.utils.tensorboard import SummaryWriter
 import torchvision
+import torchvision.models as models
 # from torchvision.datasets import MNIST
 # import torchvision.transforms as transforms
-from torchvision.models.densenet import (densenet121, densenet169, densenet161, densenet201)
+# from torchvision.models.densenet import (densenet121, densenet169, densenet161, densenet201)
 import torch.optim as optim
 import torch.optim.lr_scheduler as lr_scheduler
 # from torch.utils.data import DataLoader
@@ -51,13 +53,12 @@ from tensorpack import dataflow, imgaug
 from tensorpack.dataflow import *
 import albumentations as AB
 
-
 # from test_tube import HyperOptArgumentParser, Experiment
 # from pytorch_lightning import * #.models.trainer import Trainer
 from test_tube import Experiment
 from pytorch_lightning import Trainer
 from pytorch_lightning.logging import TestTubeLogger
-from pytorch_lightning.callbacks import EarlyStopping, ModelCheckpoint
+from pytorch_lightning.callbacks import ModelCheckpoint
 import pytorch_lightning as pl
 
 #-----------------------------------------------------------------------
@@ -65,55 +66,18 @@ import pytorch_lightning as pl
 #
 # global args
 SHAPE = 512
-BATCH = 16
+BATCH = 32
 EPOCH = 100
 GROUP = 5
 DEBUG = False 
-DPATH = ''
 
-
-model_urls = {
-    'densenet121': 'https://download.pytorch.org/models/densenet121-a639ec97.pth',
-    'densenet161': 'https://download.pytorch.org/models/densenet161-8d451a50.pth',
-    'densenet169': 'https://download.pytorch.org/models/densenet169-b2777c0a.pth',
-    'densenet201': 'https://download.pytorch.org/models/densenet201-c1103571.pth',
-}
-
-# Custom model
-# from se_dense import *153
-# from xception_dropout import *
-# from dataset import ImageDataset  # noqa
 from chexpert import *
 
-
-# def dice_loss(inputs, target):
-#     # inputs = torch.sigmoid(inputs)
-#     smooth = 1.
-
-#     iflat = inputs.view(-1)
-#     tflat = target.view(-1)
-#     intersection = (iflat * tflat).sum()
-    
-#     return 1 - ((2. * intersection + smooth) /
-#               (iflat.sum() + tflat.sum() + smooth))
-
-# class FocalLoss(nn.Module):
-#     def __init__(self, gamma=0.25, weight=None):
-#         super().__init__()
-#         self.gamma = gamma
-#         # self.nll = nn.NLLLoss(weight=weight, reduce=False)
-#         self.loss = nn.BCELoss()
-        
-#     def forward(self, inputs, target):
-#         # loss = self.nll(inputs, target)
-#         loss = self.loss(inputs, target)
-        
-#         # one_hot = make_one_hot(target.unsqueeze(dim=1), inputs.size()[1])
-#         inv_probs = 1 - inputs.exp()
-#         focal_weights = (inv_probs * target).sum(dim=1) ** self.gamma
-#         loss = loss * focal_weights
-        
-#         return loss.mean()
+MODEL_NAMES = sorted(
+    name for name in torchvision.models.__dict__
+    if name.islower() and not name.startswith("__") and callable(torchvision.models.__dict__[name])
+)
+print(MODEL_NAMES)
 
 class FocalLoss(nn.Module):
     def __init__(self, gamma=2):
@@ -134,26 +98,22 @@ class FocalLoss(nn.Module):
         
         return loss.sum(dim=1).mean()
 
-class Classifier(pl.LightningModule):
+class CustomLightningModule(pl.LightningModule):
 
-    def __init__(self, name='DenseNet121', mode='full'):
-        super(Classifier, self).__init__()
-        self.name = name
-        self.mode = mode
+    def __init__(self, hparams):
+        super(CustomLightningModule, self).__init__()
+        self.hparams = hparams # architecture is stored here
+        print(self.hparams)
+        self.model = getattr(torchvision.models, self.hparams.arch)()#(pretrained=self.hparams.pretrained)
 
-        if self.name=='DenseNet121':
-            self.model = densenet121(pretrained=False)
-            self.model.classifier = nn.Linear(1024, GROUP)
-        # elif self.name=='DenseNet169':
-        #     self.model = densenet169(pretrained=False)
-        #     self.model.classifier = nn.Linear(1024, GROUP)
-        elif self.name=='DenseNet201':
-            self.model = densenet201(pretrained=False)
-            self.model.classifier = nn.Linear(1920, GROUP)
-        else:
-            self.model = None
-        print(self.model)
-        # self.criterion = nn.BCELoss()
+        self.model.classifier = nn.Linear(1024, GROUP)
+        # if self.hparams.pretrained:
+        #     self.model = CustomLightningModule.load_from_checkpoint(
+        #         os.path.join(trainer.checkpoint_callback.filepath, "_ckpt_epoch_0.ckpt")
+        #         )
+        # if self.hparams.load is not None:
+        #     self.model = CustomLightningModule.load_from_metrics(weights_path=self.hparams.load)
+        # print(self.model.parameters)
         self.criterion = FocalLoss()
         self.output_ = []
         self.target_ = []
@@ -163,15 +123,9 @@ class Classifier(pl.LightningModule):
         return logit
 
     @pl.data_loader
-    def tng_dataloader(self):
+    def train_dataloader(self):
         # REQUIRED
-        # return DataLoader(MNIST(os.getcwd(), train=True, download=True, transform=transforms.ToTensor()), batch_size=self.hparams.batch_size)
-        # dataloader_train = DataLoader(
-        #     ImageDataset(cfg.train_csv, cfg, mode='train'),
-        #     batch_size=cfg.train_batch_size, num_workers=args.num_workers,
-        #     drop_last=True, shuffle=True)
-        # return dataloader_train
-        ds_train = Chexpert(folder=args.data, 
+        ds_train = Chexpert(folder='/u01/data/CheXpert-v1.0',
             train_or_valid='train',
             fname='train.csv',
             group=GROUP,
@@ -219,13 +173,7 @@ class Classifier(pl.LightningModule):
     @pl.data_loader
     def val_dataloader(self):
         # OPTIONAL
-        # return DataLoader(MNIST(os.getcwd(), train=True, download=True, transform=transforms.ToTensor()), batch_size=self.hparams.batch_size)
-        # dataloader_dev = DataLoader(
-        #     ImageDataset(cfg.dev_csv, cfg, mode='dev'),
-        #     batch_size=cfg.dev_batch_size, num_workers=args.num_workers,
-        #     drop_last=True, shuffle=True)
-        # return dataloader_dev
-        ds_valid = Chexpert(folder=args.data, #'/u01/data/CheXpert-v1.0-small'
+        ds_valid = Chexpert(folder='/u01/data/CheXpert-v1.0',
             train_or_valid='valid',
             fname='valid.csv',
             group=GROUP,
@@ -249,12 +197,35 @@ class Classifier(pl.LightningModule):
         ds_valid = MapData(ds_valid, lambda dp: [torch.tensor(np.transpose(dp[0], (0, 3, 1, 2))), torch.tensor(dp[1]).float()])
         return ds_valid
 
-    # @pl.data_loader
-    # def test_dataloader(self):
-        # pass 
+    @pl.data_loader
+    def test_dataloader(self):
+        # OPTIONAL
+        ds_test2 = Chexpert(folder='/vinbrain/data/mimic_validation_data',
+            train_or_valid='valid',
+            fname='mimic_valid.csv',
+            group=GROUP,
+            resize=int(SHAPE),
+            debug=DEBUG
+            )
+        ds_test2.reset_state() 
+        ag_valid = [
+            imgaug.ResizeShortestEdge(SHAPE),
+            imgaug.ColorSpace(mode=cv2.COLOR_GRAY2RGB), 
+            imgaug.Albumentations(AB.CLAHE(p=1)),
+            imgaug.CenterCrop((SHAPE, SHAPE)),
+            # imgaug.ColorSpace(mode=cv2.COLOR_RGB2GRAY),
+            imgaug.ToFloat32()
+        ]
+
+        ds_test2.reset_state()
+        ds_test2 = AugmentImageComponent(ds_test2, ag_valid, 0) 
+        ds_test2 = BatchData(ds_test2, BATCH)
+        ds_test2 = PrintData(ds_test2)
+        ds_test2 = MapData(ds_test2, lambda dp: [torch.tensor(np.transpose(dp[0], (0, 3, 1, 2))), torch.tensor(dp[1]).float()])
+        return ds_test2
 
     def configure_optimizers(self):
-        optimizer = optim.Adam(self.parameters(), lr=1e-2)
+        optimizer = optim.Adam(self.model.parameters(), lr=1e-2)
         return [optimizer]
 
     def training_step(self, batch, batch_nb):
@@ -266,7 +237,6 @@ class Classifier(pl.LightningModule):
         self.logger.experiment.add_image('train/image', inputs[0] / 255.0, self.global_step, dataformats='CHW')
         return {'loss': loss}
 
-
     def validation_step(self, batch, batch_nb):
         inputs, target = batch
         output = self.forward(inputs / 255.0)
@@ -276,8 +246,18 @@ class Classifier(pl.LightningModule):
         self.logger.experiment.add_image('valid/image', inputs[0] / 255.0, self.global_step, dataformats='CHW')
         self.output_.append(output)
         self.target_.append(target)
-        return {'valid/loss': loss, 
-                }
+        return {'valid/loss': loss}
+
+    def test_step(self, batch, batch_nb):
+        inputs, target = batch
+        output = self.forward(inputs / 255.0)
+
+        loss = self.criterion(output, target)
+        # loss = dice_loss(output, target)
+        self.logger.experiment.add_image('test2/image', inputs[0] / 255.0, self.global_step, dataformats='CHW')
+        self.output_.append(output)
+        self.target_.append(target)
+        return {'test2/loss': loss}
 
     def validation_end(self, outputs):
         avg_loss = torch.stack([x['valid/loss'] for x in outputs]).mean().cpu().numpy()
@@ -317,140 +297,137 @@ class Classifier(pl.LightningModule):
                 'valid/auc_m': auc_m,
                 }
 
-if __name__ == '__main__':
-    #-----------------------------------------------------------------------
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--seed', default=2020, type=int, help='reproducibility')
-    parser.add_argument('--gpus', help='comma separated list of GPU(s) to use.')
-    parser.add_argument('--num_workers', default=8, type=int, help='num_workers')
-    parser.add_argument('--load', help='load model')
-    parser.add_argument('--src_csv', help='src csv')
-    parser.add_argument('--dst_csv', help='dst csv')
-    parser.add_argument('--data', help='Image directory')
-    parser.add_argument('--mode', help='small | patch | full', default='small')
-    parser.add_argument('--model', help='Model name', default='ResNet50')
-    parser.add_argument('--group', type=int, default=5)
-    parser.add_argument('--batch', type=int, default=32)
-    parser.add_argument('--shape', type=int, default=320)
-    parser.add_argument('--sample', action='store_true', help='run inference')
-    parser.add_argument('--debug', action='store_true', help='small dataset')
-    
-    args = parser.parse_args()
-    print(args)
-    #-----------------------------------------------------------------------
-    # Choose the GPU
-    if args.gpus:
-        os.environ['CUDA_VISIBLE_DEVICES'] = args.gpus
+    def test_end(self, outputs):
+        avg_loss = torch.stack([x['test2/loss'] for x in outputs]).mean().cpu().numpy()
+        auc = []
+        output_ = torch.cat(self.output_, 0).detach().cpu().numpy()
+        target_ = torch.cat(self.target_, 0).detach().cpu().numpy().astype(np.uint8)
+        for idx in range(target_.shape[-1]):
+            fpr, tpr, _ = sklearn.metrics.roc_curve(target_[:,idx], output_[:,idx])
+            auc.append(sklearn.metrics.auc(fpr, tpr))
+        auc = np.array(auc)
+        auc_m = auc.mean(axis=-1)
+        print('test2/avg_loss', avg_loss)
+        print('test2/auc[0]', auc[0])
+        print('test2/auc[1]', auc[1])
+        print('test2/auc[2]', auc[2])
+        print('test2/auc[3]', auc[3])
+        print('test2/auc[4]', auc[4])
+        print('test2/auc_m', auc_m)
 
-    #-----------------------------------------------------------------------
-    # Seed the randomness
-    random.seed(args.seed)
-    np.random.seed(args.seed)
-    torch.manual_seed(args.seed)
-    if torch.cuda.is_available(): torch.cuda.manual_seed_all(args.seed)
-    torch.backends.cudnn.deterministic = False
-    torch.backends.cudnn.benchmark = True
-    #-----------------------------------------------------------------------
-    # Initialize the program
-    # TODO
-    # writer = SummaryWriter()
-    use_cuda = torch.cuda.is_available()
-    xpu = torch.device("cuda:{}".format(args.gpus) if torch.cuda.is_available() else "cpu")
-    # step = 0
+        self.logger.experiment.add_scalar('test2/loss', avg_loss, self.global_step)
+        self.logger.experiment.add_scalar('test2/auc[0]', auc[0], self.global_step)
+        self.logger.experiment.add_scalar('test2/auc[1]', auc[1], self.global_step)
+        self.logger.experiment.add_scalar('test2/auc[2]', auc[2], self.global_step)
+        self.logger.experiment.add_scalar('test2/auc[3]', auc[3], self.global_step)
+        self.logger.experiment.add_scalar('test2/auc[4]', auc[4], self.global_step)
+        self.logger.experiment.add_scalar('test2/auc_m', auc_m, self.global_step)
 
-    DEBUG = args.debug
-    GROUP = args.group
-    SHAPE = args.shape
-    BATCH = args.batch
-    DPATH = args.data
-    #-----------------------------------------------------------------------
-    # Train from scratch or load the pretrained network
-    #
-    # TODO: Create the model
-    #-----------------------------------------------------------------------
 
-    print('Create model...')
-    model = Classifier(name=args.model)
-    print('Built model')
+        self.output_ = []
+        self.target_ = []
+        return {'test2/avg_loss': avg_loss, 
+                'test2/auc[0]': auc[0],
+                'test2/auc[1]': auc[1],
+                'test2/auc[2]': auc[2],
+                'test2/auc[3]': auc[3],
+                'test2/auc[4]': auc[4],
+                'test2/auc_m': auc_m,
+                }
 
-    # TODO: Load the pretrained model
-    if args.load:
-        # TODO
-        chkpt = torch.load(args.load, map_location=xpu)
-        model.load_state_dict(chkpt)
-        # model = Classifier()
-        print('Loaded from {}...'.format(args.load))
-    
-    
-
-    #-----------------------------------------------------------------------
-    # Perform inference
-    if args.sample:
-        sample(datadir=args.data, model=model)
-        sys.exit()
-    else:
+    @staticmethod
+    def add_model_specific_args(parent_parser):  # pragma: no cover
+        parser = argparse.ArgumentParser(parents=[parent_parser])
+        parser.add_argument('-a', '--arch', metavar='ARCH', default='densenet121', choices=MODEL_NAMES,
+                            help='model architecture: ' +
+                                 ' | '.join(MODEL_NAMES) +
+                                 ' (default: densenet121)')
+        parser.add_argument('--epochs', default=90, type=int, metavar='N',
+                            help='number of total epochs to run')
+        parser.add_argument('--seed', type=int, default=2020,
+                            help='seed for initializing training. ')
+        parser.add_argument('-b', '--batch-size', default=256, type=int,
+                            metavar='N',
+                            help='mini-batch size (default: 256), this is the total '
+                                 'batch size of all GPUs on the current node when '
+                                 'using Data Parallel or Distributed Data Parallel')
+        parser.add_argument('--lr', '--learning-rate', default=0.01, type=float,
+                            metavar='LR', help='initial learning rate', dest='lr')
+        # parser.add_argument('--momentum', default=0.9, type=float, metavar='M',
+        #                     help='momentum')
+        # parser.add_argument('--wd', '--weight-decay', default=1e-4, type=float,
+        #                     metavar='W', help='weight decay (default: 1e-4)',
+        #                     dest='weight_decay')
+        parser.add_argument('--pretrained', dest='pretrained', action='store_true',
+                            help='use pre-trained model')
+        return parser
         
+def get_args():
+    parent_parser = argparse.ArgumentParser(add_help=False)
+    # parent_parser.add_argument('--data-path', metavar='DIR', type=str,
+    #                            help='path to dataset')
+    parent_parser.add_argument('--save-path', metavar='DIR', type=str, default="checkpoint", 
+                               help='path to save output')
+    parent_parser.add_argument('--gpus', type=int, default=1,
+                               help='how many gpus')
+    parent_parser.add_argument('--load', type=str, default=None,
+                               help='path to save output')
+    parent_parser.add_argument('--evaluate', action='store_true',
+                               help='run evaluate')
+    parent_parser.add_argument('--predict', action='store_true',
+                               help='run predict')
+    parser = CustomLightningModule.add_model_specific_args(parent_parser)
+    return parser.parse_args()
 
 
-        #-----------------------------------------------------------------------
-        # Attach dataflow to model
-        # model.fetch_dataflow(ds_train=ds_train,
-        #                    ds_valid=None, 
-        #                    ds_test=None)
-        #-----------------------------------------------------------------------
-        # 2 INIT TEST TUBE EXP
-        #-----------------------------------------------------------------------
+def main(hparams):
+    model = CustomLightningModule(hparams)
+    
+    if hparams.seed is not None:
+        random.seed(hparams.seed)
+        np.random.seed(hparams.seed)
+        torch.manual_seed(hparams.seed)
+        if torch.cuda.is_available(): torch.cuda.manual_seed_all(hparams.seed)
+        torch.backends.cudnn.deterministic = True
+        torch.backends.cudnn.benchmark = False
 
-        # init experiment
-        # exp = Experiment(
-        #     name='Classifier', #hyperparams.experiment_name,
-        #     save_dir=os.path.join('runs', args.model, args.mode), #hyperparams.test_tube_save_path,
-        #     # autosave=False,
-        #     # description='experiment'
-        # )
+    use_cuda = torch.cuda.is_available()
+    xpu = torch.device("cuda:{}".format(hparams.gpus) if torch.cuda.is_available() else "cpu")
 
-        # exp.save()
+    if hparams.load is not None: # Load the checkpoint here
+        chkpt = torch.load(hparams.load, map_location=xpu)
+        model.load_state_dict(chkpt['state_dict'])
+        print('Loaded from {}...'.format(hparams.load))
 
-        #-----------------------------------------------------------------------
-        # 3 DEFINE CALLBACKS
-        #-----------------------------------------------------------------------
-        # model_save_path = 'checkpoint' #'{}/{}/{}'.format(hparams.model_save_path, exp.name, exp.version)
-        # early_stop = EarlyStopping(
-        #     monitor='avg_val_loss',
-        #     patience=5,
-        #     verbose=True,
-        #     mode='auto'
-        # )
-
-
+    if hparams.evaluate:
+        pass
+    elif hparams.predict:
+        pass
+    else:
+        logger = TestTubeLogger(
+            save_dir='hparams.save_path',
+            version=1  # An existing version with a saved checkpoint
+        )
         checkpoint_callback = ModelCheckpoint(
             filepath='checkpoint',
-            save_best_only=False,
+            save_best_only=True,
             verbose=True,
             monitor='valid/avg_loss',
             mode='min',
             prefix=''
         )
-
-        logger = TestTubeLogger(
-            save_dir='train_log_pytorch',
-            version=0  # An existing version with a saved checkpoint
-        )
-
-        #-----------------------------------------------------------------------
-        # 4 INIT TRAINER
-        #-----------------------------------------------------------------------
         trainer = pl.Trainer(
-            logger=logger,
-            checkpoint_callback=checkpoint_callback,
-            # early_stop_callback=early_stop,
-            # default_save_path='runs',
-            max_nb_epochs=EPOCH, 
-            gpus=-1, #map(int, args.gpus.split(',')), #hparams.gpus,
-            # distributed_backend='ddp'
+            default_save_path=hparams.save_path,
+            gpus=-1, #hparams.gpus,
+            max_nb_epochs=hparams.epochs, 
+            # checkpoint_callback=checkpoint_callback, 
+            early_stop_callback=None,
+            # distributed_backend=hparams.distributed_backend,
+            # use_amp=hparams.use_16bit
         )
-
-        #-----------------------------------------------------------------------
-        # 5 START TRAINING
-        #-----------------------------------------------------------------------
         trainer.fit(model)
+
+
+if __name__ == '__main__':
+    main(get_args())
+
