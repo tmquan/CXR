@@ -128,8 +128,8 @@ class CustomLightningModule(pl.LightningModule):
         ds_train = Chexpert(folder='/u01/data/CheXpert-v1.0',
             train_or_valid='train',
             fname='train.csv',
-            group=GROUP,
-            resize=int(SHAPE),
+            group=self.hparams.group,
+            resize=int(self.hparams.shape),
             debug=DEBUG
             )
         
@@ -163,11 +163,11 @@ class CustomLightningModule(pl.LightningModule):
 
         ds_train.reset_state()
         ds_train = AugmentImageComponent(ds_train, ag_train, 0)
-        ds_train = MultiProcessRunner(ds_train, num_proc=4, num_prefetch=4)
-        ds_train = BatchData(ds_train, BATCH)
-        # ds_train = MultiProcessRunnerZMQ(ds_train, num_proc=8)
+        # ds_train = MultiProcessRunner(ds_train, num_proc=8, num_prefetch=4)
+        ds_train = BatchData(ds_train, self.hparams.batch)
         ds_train = PrintData(ds_train)
         ds_train = MapData(ds_train, lambda dp: [torch.tensor(np.transpose(dp[0], (0, 3, 1, 2))), torch.tensor(dp[1]).float()])
+        ds_train = MultiProcessRunner(ds_train, num_proc=16, num_prefetch=4)
         return ds_train
 
     @pl.data_loader
@@ -176,8 +176,8 @@ class CustomLightningModule(pl.LightningModule):
         ds_valid = Chexpert(folder='/u01/data/CheXpert-v1.0',
             train_or_valid='valid',
             fname='valid.csv',
-            group=GROUP,
-            resize=int(SHAPE),
+            group=self.hparams.group,
+            resize=int(self.hparams.shape),
             debug=DEBUG
             )
         ds_valid.reset_state() 
@@ -196,33 +196,6 @@ class CustomLightningModule(pl.LightningModule):
         ds_valid = PrintData(ds_valid)
         ds_valid = MapData(ds_valid, lambda dp: [torch.tensor(np.transpose(dp[0], (0, 3, 1, 2))), torch.tensor(dp[1]).float()])
         return ds_valid
-
-    @pl.data_loader
-    def test_dataloader(self):
-        # OPTIONAL
-        ds_test2 = Chexpert(folder='/vinbrain/data/mimic_validation_data',
-            train_or_valid='valid',
-            fname='mimic_valid.csv',
-            group=GROUP,
-            resize=int(SHAPE),
-            debug=DEBUG
-            )
-        ds_test2.reset_state() 
-        ag_valid = [
-            imgaug.ResizeShortestEdge(SHAPE),
-            imgaug.ColorSpace(mode=cv2.COLOR_GRAY2RGB), 
-            imgaug.Albumentations(AB.CLAHE(p=1)),
-            imgaug.CenterCrop((SHAPE, SHAPE)),
-            # imgaug.ColorSpace(mode=cv2.COLOR_RGB2GRAY),
-            imgaug.ToFloat32()
-        ]
-
-        ds_test2.reset_state()
-        ds_test2 = AugmentImageComponent(ds_test2, ag_valid, 0) 
-        ds_test2 = BatchData(ds_test2, BATCH)
-        ds_test2 = PrintData(ds_test2)
-        ds_test2 = MapData(ds_test2, lambda dp: [torch.tensor(np.transpose(dp[0], (0, 3, 1, 2))), torch.tensor(dp[1]).float()])
-        return ds_test2
 
     def configure_optimizers(self):
         optimizer = optim.Adam(self.model.parameters(), lr=1e-2)
@@ -244,20 +217,10 @@ class CustomLightningModule(pl.LightningModule):
         loss = self.criterion(output, target)
         # loss = dice_loss(output, target)
         self.logger.experiment.add_image('valid/image', inputs[0] / 255.0, self.global_step, dataformats='CHW')
+        self.logger.experiment.add_graph(self.model, inputs)
         self.output_.append(output)
         self.target_.append(target)
         return {'valid/loss': loss}
-
-    def test_step(self, batch, batch_nb):
-        inputs, target = batch
-        output = self.forward(inputs / 255.0)
-
-        loss = self.criterion(output, target)
-        # loss = dice_loss(output, target)
-        self.logger.experiment.add_image('test2/image', inputs[0] / 255.0, self.global_step, dataformats='CHW')
-        self.output_.append(output)
-        self.target_.append(target)
-        return {'test2/loss': loss}
 
     def validation_end(self, outputs):
         avg_loss = torch.stack([x['valid/loss'] for x in outputs]).mean().cpu().numpy()
@@ -297,44 +260,6 @@ class CustomLightningModule(pl.LightningModule):
                 'valid/auc_m': auc_m,
                 }
 
-    def test_end(self, outputs):
-        avg_loss = torch.stack([x['test2/loss'] for x in outputs]).mean().cpu().numpy()
-        auc = []
-        output_ = torch.cat(self.output_, 0).detach().cpu().numpy()
-        target_ = torch.cat(self.target_, 0).detach().cpu().numpy().astype(np.uint8)
-        for idx in range(target_.shape[-1]):
-            fpr, tpr, _ = sklearn.metrics.roc_curve(target_[:,idx], output_[:,idx])
-            auc.append(sklearn.metrics.auc(fpr, tpr))
-        auc = np.array(auc)
-        auc_m = auc.mean(axis=-1)
-        print('test2/avg_loss', avg_loss)
-        print('test2/auc[0]', auc[0])
-        print('test2/auc[1]', auc[1])
-        print('test2/auc[2]', auc[2])
-        print('test2/auc[3]', auc[3])
-        print('test2/auc[4]', auc[4])
-        print('test2/auc_m', auc_m)
-
-        self.logger.experiment.add_scalar('test2/loss', avg_loss, self.global_step)
-        self.logger.experiment.add_scalar('test2/auc[0]', auc[0], self.global_step)
-        self.logger.experiment.add_scalar('test2/auc[1]', auc[1], self.global_step)
-        self.logger.experiment.add_scalar('test2/auc[2]', auc[2], self.global_step)
-        self.logger.experiment.add_scalar('test2/auc[3]', auc[3], self.global_step)
-        self.logger.experiment.add_scalar('test2/auc[4]', auc[4], self.global_step)
-        self.logger.experiment.add_scalar('test2/auc_m', auc_m, self.global_step)
-
-
-        self.output_ = []
-        self.target_ = []
-        return {'test2/avg_loss': avg_loss, 
-                'test2/auc[0]': auc[0],
-                'test2/auc[1]': auc[1],
-                'test2/auc[2]': auc[2],
-                'test2/auc[3]': auc[3],
-                'test2/auc[4]': auc[4],
-                'test2/auc_m': auc_m,
-                }
-
     @staticmethod
     def add_model_specific_args(parent_parser):  # pragma: no cover
         parser = argparse.ArgumentParser(parents=[parent_parser])
@@ -346,11 +271,14 @@ class CustomLightningModule(pl.LightningModule):
                             help='number of total epochs to run')
         parser.add_argument('--seed', type=int, default=2020,
                             help='seed for initializing training. ')
-        parser.add_argument('-b', '--batch-size', default=256, type=int,
-                            metavar='N',
+        parser.add_argument('-b', '--batch', default=256, type=int,
                             help='mini-batch size (default: 256), this is the total '
                                  'batch size of all GPUs on the current node when '
                                  'using Data Parallel or Distributed Data Parallel')
+        parser.add_argument('--shape', default=512, type=int, 
+                            help='size of each image')
+        parser.add_argument('--group', default=5, type=int, 
+                            help='number of classes, can be 5 or 14')
         parser.add_argument('--lr', '--learning-rate', default=0.01, type=float,
                             metavar='LR', help='initial learning rate', dest='lr')
         # parser.add_argument('--momentum', default=0.9, type=float, metavar='M',
