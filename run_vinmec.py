@@ -5,19 +5,19 @@ import numpy as np
 import tensornets as tn
 from tensorpack import *
 from tensorpack.tfutils.summary import add_moving_summary, add_param_summary
+from tensorpack.tfutils.tower import get_current_tower_context
 from tensorpack.utils.gpu import get_num_gpu
 from tensorpack.utils.stats import BinaryStatistics
 import albumentations as AB
 from vinmec import Vinmec
 import argparse
 import os
-import tensorflow.compat.v1 as tf
+
+from absl import flags
+import tensorflow as tf
 tf.disable_v2_behavior()
 from tensorlayer.cost import binary_cross_entropy, dice_coe
-"""
-To train:
-##
-"""
+
 
 def visualize_tensors(name, imgs, scale_func=lambda x: (x + 1.) * 128., max_outputs=1):
     """Generate tensor for TensorBoard (casting, clipping)
@@ -97,17 +97,28 @@ class Model(ModelDesc):
         assert tf.test.is_gpu_available()
         with tf.name_scope('cnn'):
             if self.config.name == 'DenseNet121':
-                models = tn.DenseNet121(image, stem=True, is_training=True, classes=self.config.types)
+                models = tn.DenseNet121(image, is_training=self.training, classes=self.config.types)
+            elif self.config.name == 'DenseNet169':
+                models = tn.DenseNet169(image, is_training=self.training, classes=self.config.types)
+            elif self.config.name == 'DenseNet201':
+                models = tn.DenseNet201(image, is_training=self.training, classes=self.config.types)
+            elif self.config.name == 'DenseNet121':
+                models = tn.DenseNet121(image, is_training=self.training, classes=self.config.types)
+            elif self.config.name == 'VGG19':
+                models = tn.VGG19(image, is_training=self.training, classes=self.config.types)
             else:
                 pass
+        # tn.pretrained(models)
+            models.print_outputs()
+            output = tf.identity(models.logits)
 
-        output = tf.identity(models)
-        output = Dropout('dropout_stem', output, rate=0.5)
-        output = GlobalAvgPooling('gap', output)
-        output = Dropout('dropout_pool', output, rate=0.5)
-        # output = FullyConnected('fc1024', output, 1024, activation=tf.nn.relu)
-        # output = Dropout('dropout_feat', output, rate=0.5)
-        output = FullyConnected('linear', output, self.config.types, activation=tf.nn.relu)
+        # #
+        # #
+        # #
+        # #
+        # #
+        # #
+
         loss_xent = tf.losses.sigmoid_cross_entropy(label, output)
         loss_xent = tf.reduce_mean(loss_xent, name='loss_xent')
         # loss_xent = tf.identity(binary_cross_entropy(output, label), name='loss_xent')
@@ -208,7 +219,7 @@ if __name__ == '__main__':
                 PeriodicTrigger(ModelSaver(), every_k_epochs=1),
                 # PeriodicTrigger(MinSaver('cost'), every_k_epochs=2),
                 ScheduledHyperParamSetter('learning_rate',
-                                          [(0, 1e-2), (50, 1e-3), (100, 1e-4), (150, 1e-5)], interp='linear'),
+                                          [(0, 1e-2), (20, 1e-3), (50, 1e-4), (100, 1e-5)]), #, interp='linear'
                 InferenceRunner(ds_valid, CustomBinaryClassificationStats('logit', 'label'))
             ],
             max_epoch=200,

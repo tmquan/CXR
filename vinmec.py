@@ -61,7 +61,7 @@ class Vinmec(df.RNGDataFlow):
 
     def __iter__(self):
         indices = list(range(self.__len__()))
-        if self.shuffle:
+        if self.is_train:
             self.rng.shuffle(indices)
 
         for idx in indices:
