@@ -108,14 +108,12 @@ class Model(ModelDesc):
         # output = FullyConnected('fc1024', output, 1024, activation=tf.nn.relu)
         # output = Dropout('dropout_feat', output, rate=0.5)
         output = FullyConnected('linear', output, self.config.types, activation=tf.nn.relu)
-        # loss_xent = tf.losses.sigmoid_cross_entropy(label, output)
-        # loss_xent = tf.reduce_mean(loss_xent, name='loss_xent')
-        loss_xent = tf.identity(binary_cross_entropy(output, label), name='loss_xent')
+        loss_xent = tf.losses.sigmoid_cross_entropy(label, output)
+        loss_xent = tf.reduce_mean(loss_xent, name='loss_xent')
+        # loss_xent = tf.identity(binary_cross_entropy(output, label), name='loss_xent')
 
         logit = tf.sigmoid(output, name='logit')
-        # estim = tf.cast(logit + 0.5, tf.int32, name='estim')
-
-        loss_dice = tf.identity(1.0 - dice_coe(logit, label, axis=(1), loss_type='jaccard'), name='loss_dice') 
+        loss_dice = tf.identity(1.0 - dice_coe(logit, label, axis=(1), loss_type='jaccard'), name='loss_dice')
         # weight decay on all W of fc layers
         wd_w = tf.train.exponential_decay(0.0002, get_global_step_var(),
                                           500000, 0.2, True)
@@ -124,7 +122,7 @@ class Model(ModelDesc):
         # Visualization
         add_param_summary(('.*/W', ['histogram']))   # monitor W
         visualize_tensors('image', [image], scale_func=lambda x: x * 128 + 128, max_outputs=max(64, self.config.batch))
-        cost = tf.add_n([loss_dice, wd_loss], name='cost')
+        cost = tf.add_n([loss_dice, loss_xent, wd_loss], name='cost')
         add_moving_summary(loss_xent)
         add_moving_summary(loss_dice)
         add_moving_summary(wd_loss)
@@ -133,7 +131,7 @@ class Model(ModelDesc):
 
     def optimizer(self):
         lrate = tf.get_variable('learning_rate', initializer=0.01, trainable=False)
-        optim = tf.train.MomentumOptimizer(lrate, 0.9)
+        optim = tf.train.MomentumOptimizer(lrate, 0.9, use_nesterov=True)
         # optim = tf.train.AdamOptimizer(lrate, beta1=0.5, epsilon=1e-3)
         return optim
 
@@ -174,8 +172,8 @@ if __name__ == '__main__':
             imgaug.ColorSpace(mode=cv2.COLOR_GRAY2RGB),
             imgaug.RotationAndCropValid(max_deg=45),
             imgaug.Albumentations(AB.CLAHE(p=1)),
-            imgaug.GoogleNetRandomCropAndResize(crop_area_fraction=(0.60, 1.0),
-                                                aspect_ratio_range=(0.95, 1.05),
+            imgaug.GoogleNetRandomCropAndResize(crop_area_fraction=(0.6, 1.0),
+                                                aspect_ratio_range=(0.8, 1.2),
                                                 interp=cv2.INTER_LINEAR, target_shape=config.shape),
             imgaug.ColorSpace(mode=cv2.COLOR_RGB2GRAY),
             imgaug.ToFloat32(),
