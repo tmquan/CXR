@@ -39,7 +39,7 @@ class CustomBinaryClassificationStats(Inferencer):
     Compute precision / recall in binary classification, given the
     prediction vector and the label vector.
     """
-    def __init__(self, pred_tensor_name, label_tensor_name, prefix='valid'):
+    def __init__(self, pred_tensor_name, label_tensor_name, prefix='validation'):
         """
         Args:
             pred_tensor_name(str): name of the 0/1 prediction tensor.
@@ -67,6 +67,29 @@ class CustomBinaryClassificationStats(Inferencer):
                 }
 
 
+def class_balanced_sigmoid_cross_entropy(logits, label, name='cross_entropy_loss'):
+    """
+    The class-balanced cross entropy loss,
+    as in `Holistically-Nested Edge Detection
+    <http://arxiv.org/abs/1504.06375>`_.
+    Args:
+        logits: of shape (b, ...).
+        label: of the same shape. the ground truth in {0,1}.
+    Returns:
+        class-balanced cross entropy loss.
+    """
+    with tf.name_scope('class_balanced_sigmoid_cross_entropy'):
+        y = tf.cast(label, tf.float32)
+
+        count_neg = tf.reduce_sum(1. - y)
+        count_pos = tf.reduce_sum(y)
+        beta = count_neg / (count_neg + count_pos)
+
+        pos_weight = beta / (1 - beta)
+        cost = tf.nn.weighted_cross_entropy_with_logits(logits=logits, targets=y, pos_weight=pos_weight)
+        cost = tf.reduce_mean(cost * (1 - beta))
+        zero = tf.equal(count_pos, 0.0)
+    return tf.where(zero, 0.0, cost, name=name)
 
 class Model(ModelDesc):
     """[summary]
@@ -102,48 +125,31 @@ class Model(ModelDesc):
                 models = tn.DenseNet169(image, is_training=self.training, classes=self.config.types)
             elif self.config.name == 'DenseNet201':
                 models = tn.DenseNet201(image, is_training=self.training, classes=self.config.types)
-            elif self.config.name == 'DenseNet121':
-                models = tn.DenseNet121(image, is_training=self.training, classes=self.config.types)
+            elif self.config.name == 'ResNet101':
+                models = tn.ResNet101(image, is_training=self.training, classes=self.config.types)
             elif self.config.name == 'VGG19':
                 models = tn.VGG19(image, is_training=self.training, classes=self.config.types)
             else:
                 pass
-        # tn.pretrained(models)
+
             models.print_outputs()
-            output = tf.identity(models.logits)
+            output = tf.tanh(models.logits)
 
-        # #
-        # #
-        # #
-        # #
-        # #
-        # #
-
-        loss_xent = tf.losses.sigmoid_cross_entropy(label, output)
-        loss_xent = tf.reduce_mean(loss_xent, name='loss_xent')
-        # loss_xent = tf.identity(binary_cross_entropy(output, label), name='loss_xent')
-
-        logit = tf.sigmoid(output, name='logit')
-        loss_dice = tf.identity(1.0 - dice_coe(logit, label, axis=(1), loss_type='jaccard'), name='loss_dice')
-        # weight decay on all W of fc layers
-        wd_w = tf.train.exponential_decay(0.0002, get_global_step_var(),
-                                          500000, 0.2, True)
-        wd_loss = tf.multiply(wd_w, regularize_cost('.*/W', tf.nn.l2_loss), name='wd_loss')
+        logit = tf.identity(output / 2.0 + 0.5, name='logit') #tf.sigmoid(output, name='logit')
+        loss_xent = class_balanced_sigmoid_cross_entropy(output, label, name='loss_xent')
 
         # Visualization
         add_param_summary(('.*/W', ['histogram']))   # monitor W
-        visualize_tensors('image', [image], scale_func=lambda x: x * 128 + 128, max_outputs=max(64, self.config.batch))
-        cost = tf.add_n([loss_dice, loss_xent, wd_loss], name='cost')
+        visualize_tensors('image', [image], scale_func=lambda x: x * 128.0 + 128.0, max_outputs=max(64, self.config.batch))
+        cost = tf.add_n([loss_xent], name='cost')
         add_moving_summary(loss_xent)
-        add_moving_summary(loss_dice)
-        add_moving_summary(wd_loss)
         add_moving_summary(cost)
         return cost
 
     def optimizer(self):
         lrate = tf.get_variable('learning_rate', initializer=0.01, trainable=False)
-        optim = tf.train.MomentumOptimizer(lrate, 0.9, use_nesterov=True)
-        # optim = tf.train.AdamOptimizer(lrate, beta1=0.5, epsilon=1e-3)
+        # optim = tf.train.MomentumOptimizer(lrate, 0.9, use_nesterov=True)
+        optim = tf.train.AdamOptimizer(lrate, beta1=0.5, epsilon=1e-3)
         return optim
 
 
@@ -181,7 +187,7 @@ if __name__ == '__main__':
         ds_train = Vinmec(folder=config.data, train_or_valid='train', fname='train.csv', types=config.types, resize=int(config.shape))
         ag_train = [
             imgaug.ColorSpace(mode=cv2.COLOR_GRAY2RGB),
-            imgaug.RotationAndCropValid(max_deg=45),
+            imgaug.RotationAndCropValid(max_deg=25),
             imgaug.Albumentations(AB.CLAHE(p=1)),
             imgaug.GoogleNetRandomCropAndResize(crop_area_fraction=(0.6, 1.0),
                                                 aspect_ratio_range=(0.8, 1.2),
@@ -192,7 +198,7 @@ if __name__ == '__main__':
         ds_train.reset_state()
         ds_train = AugmentImageComponent(ds_train, ag_train, 0)
         ds_train = BatchData(ds_train, config.batch)
-        ds_train = MultiProcessRunnerZMQ(ds_train, num_proc=8)
+        ds_train = MultiProcessRunnerZMQ(ds_train, num_proc=2)
         ds_train = PrintData(ds_train)
         # ds_train = FixedSizeData(ds_train, 200) # For debugging purpose
 
@@ -208,7 +214,7 @@ if __name__ == '__main__':
         ds_valid.reset_state()
         ds_valid = AugmentImageComponent(ds_valid, ag_valid, 0)
         ds_valid = BatchData(ds_valid, config.batch)
-        ds_valid = MultiProcessRunnerZMQ(ds_valid, num_proc=1)
+        # ds_valid = MultiProcessRunnerZMQ(ds_valid, num_proc=1)
         ds_valid = PrintData(ds_valid)
 
         # Setup the config
@@ -217,12 +223,14 @@ if __name__ == '__main__':
             dataflow=ds_train,
             callbacks=[
                 PeriodicTrigger(ModelSaver(), every_k_epochs=1),
-                # PeriodicTrigger(MinSaver('cost'), every_k_epochs=2),
+                PeriodicTrigger(MinSaver('cost'), every_k_epochs=2),
                 ScheduledHyperParamSetter('learning_rate',
                                           [(0, 1e-2), (20, 1e-3), (50, 1e-4), (100, 1e-5)]), #, interp='linear'
-                InferenceRunner(ds_valid, CustomBinaryClassificationStats('logit', 'label'))
+                InferenceRunner(ds_valid, [CustomBinaryClassificationStats('logit', 'label'),
+                                           ScalarStats('loss_xent'),
+                                           ])
             ],
-            max_epoch=200,
+            max_epoch=300,
             session_init=SmartInit(config.load),
         )
 
