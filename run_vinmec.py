@@ -57,7 +57,10 @@ class CustomBinaryClassificationStats(Inferencer):
 
     def _on_fetches(self, outputs):
         pred, label = outputs
-        self.stat.feed((pred+0.5).astype(np.int32), label)
+        # Remove Pneumonia/infection
+        pred = pred[:, 0:5]
+        label = label[:, 0:5]
+        self.stat.feed((pred + 0.5).astype(np.int32), label)
 
     def _after_inference(self):
         return {self.prefix + '_precision': self.stat.precision,
@@ -118,31 +121,38 @@ class Model(ModelDesc):
     def build_graph(self, image, label):
         image = image / 128.0 - 1.0
         assert tf.test.is_gpu_available()
-        with tf.name_scope('cnn'):
-            if self.config.name == 'DenseNet121':
-                models = tn.DenseNet121(image, is_training=self.training, classes=self.config.types)
-            elif self.config.name == 'DenseNet169':
-                models = tn.DenseNet169(image, is_training=self.training, classes=self.config.types)
-            elif self.config.name == 'DenseNet201':
-                models = tn.DenseNet201(image, is_training=self.training, classes=self.config.types)
-            elif self.config.name == 'ResNet101':
-                models = tn.ResNet101(image, is_training=self.training, classes=self.config.types)
-            elif self.config.name == 'VGG19':
-                models = tn.VGG19(image, is_training=self.training, classes=self.config.types)
-            else:
-                pass
+        # with tf.name_scope('cnn'):
+        if self.config.name == 'DenseNet121':
+            models = tn.DenseNet121(image, is_training=self.training, classes=self.config.types)
+        elif self.config.name == 'DenseNet169':
+            models = tn.DenseNet169(image, is_training=self.training, classes=self.config.types)
+        elif self.config.name == 'DenseNet201':
+            models = tn.DenseNet201(image, is_training=self.training, classes=self.config.types)
+        elif self.config.name == 'ResNet101':
+            models = tn.ResNet101(image, is_training=self.training, classes=self.config.types)
+        elif self.config.name == 'InceptionResNet2':
+            models = tn.InceptionResNet2(image, is_training=self.training, classes=self.config.types)
+        elif self.config.name == 'VGG19':
+            models = tn.VGG19(image, is_training=self.training, classes=self.config.types)
+        else:
+            pass
 
-            models.print_outputs()
-            output = tf.tanh(models.logits)
+        models.print_outputs()
+        output = tf.tanh(models.logits)
 
         logit = tf.identity(output / 2.0 + 0.5, name='logit') #tf.sigmoid(output, name='logit')
         loss_xent = class_balanced_sigmoid_cross_entropy(output, label, name='loss_xent')
 
         # Visualization
+        wd_w = tf.train.exponential_decay(2e-4, get_global_step_var(),
+                                          80000, 0.7, True)
+        wd_cost = tf.multiply(wd_w, regularize_cost('.*/W', tf.nn.l2_loss), name='wd_cost')
+
         add_param_summary(('.*/W', ['histogram']))   # monitor W
         visualize_tensors('image', [image], scale_func=lambda x: x * 128.0 + 128.0, max_outputs=max(64, self.config.batch))
-        cost = tf.add_n([loss_xent], name='cost')
+        cost = tf.add_n([loss_xent, wd_cost], name='cost')
         add_moving_summary(loss_xent)
+        add_moving_summary(wd_cost)
         add_moving_summary(cost)
         return cost
 
@@ -166,13 +176,13 @@ if __name__ == '__main__':
     parser.add_argument('--load', help='load model')
     parser.add_argument('--data', default='/u01/data/Vimmec_Data_small/', help='Data directory')
     parser.add_argument('--save', default='train_log/', help='Saving directory')
-    parser.add_argument('--types', type=int, default=5)
+    parser.add_argument('--types', type=int, default=6)
     parser.add_argument('--batch', type=int, default=64)
     parser.add_argument('--shape', type=int, default=256)
 
     config = parser.parse_args()
     if config.gpus:
-        os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
+        # os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
         os.environ['CUDA_VISIBLE_DEVICES'] = config.gpus
 
     model = Model(config=config)
@@ -188,45 +198,71 @@ if __name__ == '__main__':
         ag_train = [
             imgaug.ColorSpace(mode=cv2.COLOR_GRAY2RGB),
             imgaug.RotationAndCropValid(max_deg=25),
-            imgaug.Albumentations(AB.CLAHE(p=1)),
+            # imgaug.Albumentations(AB.CLAHE(p=1)),
             imgaug.GoogleNetRandomCropAndResize(crop_area_fraction=(0.6, 1.0),
                                                 aspect_ratio_range=(0.8, 1.2),
                                                 interp=cv2.INTER_LINEAR, target_shape=config.shape),
             imgaug.ColorSpace(mode=cv2.COLOR_RGB2GRAY),
             imgaug.ToFloat32(),
         ]
+        # ds_train.reset_state()
+        # ds_train = AugmentImageComponent(ds_train, ag_train, 0)
+        # ds_train = BatchData(ds_train, config.batch)
+        # ds_train = MultiProcessRunnerZMQ(ds_train, num_proc=2)
+        # ds_train = PrintData(ds_train)
+        # ds_train = FixedSizeData(ds_train, 200) # For debugging purpose
+
+        # Setup the dataset for validating
+        ds_valid = Vinmec(folder=config.data, train_or_valid='train', fname='valid.csv', types=config.types, resize=int(config.shape))
+
+        ag_valid = [
+            imgaug.ColorSpace(mode=cv2.COLOR_GRAY2RGB),
+            imgaug.RotationAndCropValid(max_deg=25),
+            # imgaug.Albumentations(AB.CLAHE(p=1)),
+            imgaug.GoogleNetRandomCropAndResize(crop_area_fraction=(0.6, 1.0),
+                                                aspect_ratio_range=(0.8, 1.2),
+                                                interp=cv2.INTER_LINEAR, target_shape=config.shape),
+            imgaug.ColorSpace(mode=cv2.COLOR_RGB2GRAY),
+            imgaug.ToFloat32(),
+        ]
+        # ds_valid.reset_state()
+        # ds_valid = AugmentImageComponent(ds_valid, ag_valid, 0)
+        # ds_valid = BatchData(ds_valid, config.batch)
+        # # ds_valid = MultiProcessRunnerZMQ(ds_valid, num_proc=1)
+        # ds_valid = PrintData(ds_valid)
+        ds_train = ConcatData([ds_train, ds_valid])
         ds_train.reset_state()
         ds_train = AugmentImageComponent(ds_train, ag_train, 0)
         ds_train = BatchData(ds_train, config.batch)
         ds_train = MultiProcessRunnerZMQ(ds_train, num_proc=2)
         ds_train = PrintData(ds_train)
-        # ds_train = FixedSizeData(ds_train, 200) # For debugging purpose
 
-        # Setup the dataset for validating
-        ds_valid = Vinmec(folder=config.data, train_or_valid='valid', fname='valid.csv', types=config.types, resize=int(config.shape))
+         # Setup the dataset for validating
+        ds_test2 = Vinmec(folder=config.data, train_or_valid='valid', fname='valid.csv', types=config.types, resize=int(config.shape))
 
-        ag_valid = [
-            imgaug.ColorSpace(mode=cv2.COLOR_GRAY2RGB),
-            imgaug.Albumentations(AB.CLAHE(p=1)),
-            imgaug.ColorSpace(mode=cv2.COLOR_RGB2GRAY),
+        ag_test2 = [
+            # imgaug.ColorSpace(mode=cv2.COLOR_GRAY2RGB),
+            # imgaug.Albumentations(AB.CLAHE(p=1)),
+            # imgaug.ColorSpace(mode=cv2.COLOR_RGB2GRAY),
             imgaug.ToFloat32(),
         ]
-        ds_valid.reset_state()
-        ds_valid = AugmentImageComponent(ds_valid, ag_valid, 0)
-        ds_valid = BatchData(ds_valid, config.batch)
-        # ds_valid = MultiProcessRunnerZMQ(ds_valid, num_proc=1)
-        ds_valid = PrintData(ds_valid)
+        ds_test2.reset_state()
+        ds_test2 = AugmentImageComponent(ds_test2, ag_test2, 0)
+        ds_test2 = BatchData(ds_test2, config.batch)
+        # ds_test2 = MultiProcessRunnerZMQ(ds_test2, num_proc=1)
+        ds_test2 = PrintData(ds_test2)
 
+       
         # Setup the config
         config = TrainConfig(
             model=model,
             dataflow=ds_train,
             callbacks=[
-                PeriodicTrigger(ModelSaver(), every_k_epochs=1),
-                PeriodicTrigger(MinSaver('cost'), every_k_epochs=2),
+                PeriodicTrigger(ModelSaver(), every_k_epochs=5),
+                PeriodicTrigger(MinSaver('cost'), every_k_epochs=10),
                 ScheduledHyperParamSetter('learning_rate',
                                           [(0, 1e-2), (20, 1e-3), (50, 1e-4), (100, 1e-5)]), #, interp='linear'
-                InferenceRunner(ds_valid, [CustomBinaryClassificationStats('logit', 'label'),
+                InferenceRunner(ds_test2, [CustomBinaryClassificationStats('logit', 'label'),
                                            ScalarStats('loss_xent'),
                                            ])
             ],
