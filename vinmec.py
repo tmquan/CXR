@@ -78,13 +78,13 @@ class Vinmec(df.RNGDataFlow):
                 image = image[:, :, np.newaxis]
 
             label = []
-            if self.types == 6:
+            if self.types == 5:
                 label.append(self.df.iloc[idx]['Atelectasis'])
                 label.append(self.df.iloc[idx]['Cardiomegaly'])
                 label.append(self.df.iloc[idx]['Consolidation'])
                 label.append(self.df.iloc[idx]['Edema'])
                 label.append(self.df.iloc[idx]['Pleural Effusion'])
-                label.append(self.df.iloc[idx]['Pneumonia/infection'])
+                # label.append(self.df.iloc[idx]['Pneumonia/infection'])
             else:
                 pass
             # Try catch exception

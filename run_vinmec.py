@@ -6,6 +6,8 @@ import tensornets as tn
 from tensorpack import *
 from tensorpack.tfutils.summary import add_moving_summary, add_param_summary
 from tensorpack.tfutils.tower import get_current_tower_context
+from tensorpack.tfutils.scope_utils import under_name_scope
+from tensorpack.utils import logger
 from tensorpack.utils.gpu import get_num_gpu
 from tensorpack.utils.stats import BinaryStatistics
 import albumentations as AB
@@ -17,6 +19,12 @@ from absl import flags
 import tensorflow as tf
 tf.disable_v2_behavior()
 from tensorlayer.cost import binary_cross_entropy, dice_coe
+
+from tensornets import DenseNet201 
+from models.shufflenet import ShuffleNet
+from models.densenet import DenseNet
+from models.vgg16 import VGG16
+from models.inceptionbn import InceptionBN
 
 
 def visualize_tensors(name, imgs, scale_func=lambda x: (x + 1.) * 128., max_outputs=1):
@@ -94,6 +102,9 @@ def class_balanced_sigmoid_cross_entropy(logits, label, name='cross_entropy_loss
         zero = tf.equal(count_pos, 0.0)
     return tf.where(zero, 0.0, cost, name=name)
 
+
+
+
 class Model(ModelDesc):
     """[summary]
     [description]
@@ -124,23 +135,42 @@ class Model(ModelDesc):
         # with tf.name_scope('cnn'):
         if self.config.name == 'DenseNet121':
             models = tn.DenseNet121(image, is_training=self.training, classes=self.config.types)
+            models.print_outputs()
+            output = tf.identity(models.logits)
         elif self.config.name == 'DenseNet169':
             models = tn.DenseNet169(image, is_training=self.training, classes=self.config.types)
+            models.print_outputs()
+            output = tf.identity(models.logits)
         elif self.config.name == 'DenseNet201':
             models = tn.DenseNet201(image, is_training=self.training, classes=self.config.types)
+            models.print_outputs()
+            output = tf.identity(models.logits)
         elif self.config.name == 'ResNet101':
             models = tn.ResNet101(image, is_training=self.training, classes=self.config.types)
+            models.print_outputs()
+            output = tf.identity(models.logits)
         elif self.config.name == 'InceptionResNet2':
             models = tn.InceptionResNet2(image, is_training=self.training, classes=self.config.types)
+            models.print_outputs()
+            output = tf.identity(models.logits)
         elif self.config.name == 'VGG19':
             models = tn.VGG19(image, is_training=self.training, classes=self.config.types)
+            models.print_outputs()
+            output = tf.identity(models.logits)
+        elif self.config.name == 'VGG16':
+            output = VGG16(image, classes=self.config.types)
+        elif self.config.name == 'ShuffleNet':
+            output = ShuffleNet(image, classes=self.config.types)
+        elif self.config.name == 'DenseNet':
+            output = DenseNet(image, classes=self.config.types)
+        elif self.config.name == 'InceptionBN':
+            output = InceptionBN(image, classes=self.config.types)
         else:
             pass
 
-        models.print_outputs()
-        output = tf.tanh(models.logits)
 
-        logit = tf.identity(output / 2.0 + 0.5, name='logit') #tf.sigmoid(output, name='logit')
+
+        logit = tf.sigmoid(output, name='logit') #tf.sigmoid(output, name='logit')
         loss_xent = class_balanced_sigmoid_cross_entropy(output, label, name='loss_xent')
 
         # Visualization
@@ -176,7 +206,7 @@ if __name__ == '__main__':
     parser.add_argument('--load', help='load model')
     parser.add_argument('--data', default='/u01/data/Vimmec_Data_small/', help='Data directory')
     parser.add_argument('--save', default='train_log/', help='Saving directory')
-    parser.add_argument('--types', type=int, default=6)
+    parser.add_argument('--types', type=int, default=5)
     parser.add_argument('--batch', type=int, default=64)
     parser.add_argument('--shape', type=int, default=256)
 
@@ -194,14 +224,32 @@ if __name__ == '__main__':
             config.save, config.name, str(config.shape), str(config.types), ), 'd')
 
         # Setup the dataset for training
-        ds_train = Vinmec(folder=config.data, train_or_valid='train', fname='train.csv', types=config.types, resize=int(config.shape))
+        ds_train = Vinmec(folder=config.data, 
+                          train_or_valid='train', 
+                          fname='train.csv', 
+                          types=config.types, 
+                          resize=int(config.shape))
         ag_train = [
             imgaug.ColorSpace(mode=cv2.COLOR_GRAY2RGB),
             imgaug.RotationAndCropValid(max_deg=25),
-            # imgaug.Albumentations(AB.CLAHE(p=1)),
-            imgaug.GoogleNetRandomCropAndResize(crop_area_fraction=(0.6, 1.0),
+            imgaug.Albumentations(AB.CLAHE(p=0.5)),
+            imgaug.GoogleNetRandomCropAndResize(crop_area_fraction=(0.8, 1.0),
                                                 aspect_ratio_range=(0.8, 1.2),
                                                 interp=cv2.INTER_LINEAR, target_shape=config.shape),
+            imgaug.RandomOrderAug(
+                [imgaug.BrightnessScale((0.6, 1.4), clip=False),
+                 imgaug.Contrast((0.6, 1.4), clip=False),
+                 imgaug.Saturation(0.4, rgb=False),
+                 # rgb-bgr conversion for the constants copied from fb.resnet.torch
+                 imgaug.Lighting(0.1,
+                                 eigval=np.asarray(
+                                     [0.2175, 0.0188, 0.0045][::-1]) * 255.0,
+                                 eigvec=np.array(
+                                     [[-0.5675, 0.7192, 0.4009],
+                                      [-0.5808, -0.0045, -0.8140],
+                                      [-0.5836, -0.6948, 0.4203]],
+                                     dtype='float32')[::-1, ::-1]
+                                 )]),
             imgaug.ColorSpace(mode=cv2.COLOR_RGB2GRAY),
             imgaug.ToFloat32(),
         ]
@@ -215,22 +263,31 @@ if __name__ == '__main__':
         # Setup the dataset for validating
         ds_valid = Vinmec(folder=config.data, train_or_valid='train', fname='valid.csv', types=config.types, resize=int(config.shape))
 
-        ag_valid = [
-            imgaug.ColorSpace(mode=cv2.COLOR_GRAY2RGB),
-            imgaug.RotationAndCropValid(max_deg=25),
-            # imgaug.Albumentations(AB.CLAHE(p=1)),
-            imgaug.GoogleNetRandomCropAndResize(crop_area_fraction=(0.6, 1.0),
-                                                aspect_ratio_range=(0.8, 1.2),
-                                                interp=cv2.INTER_LINEAR, target_shape=config.shape),
-            imgaug.ColorSpace(mode=cv2.COLOR_RGB2GRAY),
-            imgaug.ToFloat32(),
-        ]
+        # ag_valid = [
+        #     imgaug.ColorSpace(mode=cv2.COLOR_GRAY2RGB),
+        #     imgaug.RotationAndCropValid(max_deg=25),
+        #     # imgaug.Albumentations(AB.CLAHE(p=1)),
+        #     imgaug.GoogleNetRandomCropAndResize(crop_area_fraction=(0.6, 1.0),
+        #                                         aspect_ratio_range=(0.8, 1.2),
+        #                                         interp=cv2.INTER_LINEAR, target_shape=config.shape),
+        #     imgaug.ColorSpace(mode=cv2.COLOR_RGB2GRAY),
+        #     imgaug.ToFloat32(),
+        # ]
         # ds_valid.reset_state()
         # ds_valid = AugmentImageComponent(ds_valid, ag_valid, 0)
         # ds_valid = BatchData(ds_valid, config.batch)
         # # ds_valid = MultiProcessRunnerZMQ(ds_valid, num_proc=1)
         # ds_valid = PrintData(ds_valid)
-        ds_train = ConcatData([ds_train, ds_valid])
+
+        ds_other = Vinmec(folder='/u01/data/CXR/CheXpert-v1.0-small/', 
+                          train_or_valid='train', 
+                          fname='valid_chexpert_vinmec_format.csv', 
+                          types=config.types, 
+                          resize=int(config.shape))
+        
+
+        ds_train = ConcatData([ds_train, ds_valid, ds_other])
+        # ds_train = LocallyShuffleData(ds_train)
         ds_train.reset_state()
         ds_train = AugmentImageComponent(ds_train, ag_train, 0)
         ds_train = BatchData(ds_train, config.batch)
@@ -238,12 +295,16 @@ if __name__ == '__main__':
         ds_train = PrintData(ds_train)
 
          # Setup the dataset for validating
-        ds_test2 = Vinmec(folder=config.data, train_or_valid='valid', fname='valid.csv', types=config.types, resize=int(config.shape))
+        ds_test2 = Vinmec(folder=config.data, 
+                          train_or_valid='valid', 
+                          fname='valid.csv', 
+                          types=config.types, 
+                          resize=int(config.shape))
 
         ag_test2 = [
-            # imgaug.ColorSpace(mode=cv2.COLOR_GRAY2RGB),
-            # imgaug.Albumentations(AB.CLAHE(p=1)),
-            # imgaug.ColorSpace(mode=cv2.COLOR_RGB2GRAY),
+            imgaug.ColorSpace(mode=cv2.COLOR_GRAY2RGB),
+            imgaug.Albumentations(AB.CLAHE(p=1)),
+            imgaug.ColorSpace(mode=cv2.COLOR_RGB2GRAY),
             imgaug.ToFloat32(),
         ]
         ds_test2.reset_state()
