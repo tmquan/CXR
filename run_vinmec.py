@@ -132,7 +132,7 @@ class Model(ModelDesc):
 
     def build_graph(self, image, label):
         image = image / 128.0 - 1.0
-        assert tf.test.is_gpu_available()
+        # assert tf.test.is_gpu_available()
         # with tf.name_scope('cnn'):
         if self.config.name == 'DenseNet121':
             models = tn.DenseNet121(image, is_training=self.training, classes=self.config.types)
@@ -163,7 +163,7 @@ class Model(ModelDesc):
         elif self.config.name == 'ShuffleNet':
             output = ShuffleNet(image, classes=self.config.types)
         elif self.config.name == 'ResNet101':
-            output = ResNet101(image, classes=self.config.types)
+            output = ResNet101(image, mode=self.config.mode, classes=self.config.types)
         elif self.config.name == 'DenseNet':
             output = DenseNet(image, classes=self.config.types)
         elif self.config.name == 'InceptionBN':
@@ -209,6 +209,7 @@ if __name__ == '__main__':
     parser.add_argument('--load', help='load model')
     parser.add_argument('--data', default='/u01/data/Vimmec_Data_small/', help='Data directory')
     parser.add_argument('--save', default='train_log/', help='Saving directory')
+    parser.add_argument('--mode', default='none', help='Additional mode of resnet')
     parser.add_argument('--types', type=int, default=5)
     parser.add_argument('--batch', type=int, default=64)
     parser.add_argument('--shape', type=int, default=256)
@@ -224,7 +225,7 @@ if __name__ == '__main__':
         pass
     else:
         logger.set_logger_dir(os.path.join(
-            config.save, config.name, str(config.shape), str(config.types), ), 'd')
+            config.save, config.name, config.mode, str(config.shape), str(config.types), ), 'd')
 
         # Setup the dataset for training
         ds_train = Vinmec(folder=config.data, 

@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 # File: resnet_model.py
-
+import sys
 import tensorflow as tf
 
 from tensorpack.models import BatchNorm, BNReLU, Conv2D, FullyConnected, GlobalAvgPooling, MaxPooling
@@ -8,7 +8,7 @@ from tensorpack.tfutils.argscope import argscope, get_arg_scope
 
 
 def resnet_shortcut(l, n_out, stride, activation=tf.identity):
-    data_format = get_arg_scope()['Conv2D']['data_format']
+    data_format = 'channels_first' #get_arg_scope()['Conv2D']['data_format']
     n_in = l.get_shape().as_list()[1 if data_format in ['NCHW', 'channels_first'] else 3]
     if n_in != n_out:   # change dimension when channel is not the same
         return Conv2D('convshortcut', l, n_out, 1, strides=stride, activation=activation)
@@ -137,8 +137,11 @@ def resnet_backbone(image, num_blocks, group_func, block_func, classes=1000):
                                 kernel_initializer=tf.random_normal_initializer(stddev=0.01))
     return logits
 
-def ResNet101(image, classes=5):
-    return resnet_backbone(image, [3, 4, 23, 3], resnet_group, resnet_bottleneck, classes=classes)
+def ResNet101(image, num_blocks=[3, 4, 23, 3], mode='preact', classes=5):
+    block_func = getattr(sys.modules[__name__], mode + '_bottleneck', None)
+    return resnet_backbone(image, [3, 4, 23, 3], 
+                            preact_group if mode == 'preact' else resnet_group, 
+                            block_func, classes=classes)
 # self.num_blocks, self.block_func = {
 #             18: ([2, 2, 2, 2], basicblock),
 #             34: ([3, 4, 6, 3], basicblock),
