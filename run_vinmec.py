@@ -146,9 +146,9 @@ class Model(ModelDesc):
             models = tn.DenseNet201(image, is_training=self.training, classes=self.config.types)
             models.print_outputs()
             output = tf.identity(models.logits)
-        elif self.config.name == 'ResNet101':
-            models = tn.ResNet101(image, is_training=self.training, classes=self.config.types)
-            models.print_outputs()
+        # elif self.config.name == 'ResNet101':
+        #     models = tn.ResNet101(image, is_training=self.training, classes=self.config.types)
+        #     models.print_outputs()
             output = tf.identity(models.logits)
         elif self.config.name == 'InceptionResNet2':
             models = tn.InceptionResNet2(image, is_training=self.training, classes=self.config.types)

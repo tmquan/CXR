@@ -138,7 +138,7 @@ def resnet_backbone(image, num_blocks, group_func, block_func, classes=1000):
     return logits
 
 def ResNet101(image, classes=5):
-    return resnet_backbone(image, [3, 4, 23, 3], bottleneck, classes=classes)
+    return resnet_backbone(image, [3, 4, 23, 3], resnet_bottleneck, classes=classes)
 # self.num_blocks, self.block_func = {
 #             18: ([2, 2, 2, 2], basicblock),
 #             34: ([3, 4, 6, 3], basicblock),
