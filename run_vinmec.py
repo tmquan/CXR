@@ -23,6 +23,7 @@ from tensorlayer.cost import binary_cross_entropy, dice_coe
 from tensornets import DenseNet201 
 from models.shufflenet import ShuffleNet
 from models.densenet import DenseNet
+from models.resnet import ResNet101
 from models.vgg16 import VGG16
 from models.inceptionbn import InceptionBN
 
@@ -161,6 +162,8 @@ class Model(ModelDesc):
             output = VGG16(image, classes=self.config.types)
         elif self.config.name == 'ShuffleNet':
             output = ShuffleNet(image, classes=self.config.types)
+        elif self.config.name == 'ResNet101':
+            output = ResNet101(image, classes=self.config.types)
         elif self.config.name == 'DenseNet':
             output = DenseNet(image, classes=self.config.types)
         elif self.config.name == 'InceptionBN':
