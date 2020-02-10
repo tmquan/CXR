@@ -8,7 +8,7 @@ from tensorpack.tfutils.argscope import argscope, get_arg_scope
 
 
 def resnet_shortcut(l, n_out, stride, activation=tf.identity):
-    data_format = 'channels_first' #get_arg_scope()['Conv2D']['data_format']
+    data_format = get_arg_scope()['Conv2D']['data_format']
     n_in = l.get_shape().as_list()[1 if data_format in ['NCHW', 'channels_first'] else 3]
     if n_in != n_out:   # change dimension when channel is not the same
         return Conv2D('convshortcut', l, n_out, 1, strides=stride, activation=activation)
@@ -122,8 +122,11 @@ def resnet_group(name, l, block_func, features, count, stride):
 
 
 def resnet_backbone(image, num_blocks, group_func, block_func, classes=1000):
-    with argscope(Conv2D, use_bias=False,
-                  kernel_initializer=tf.variance_scaling_initializer(scale=2.0, mode='fan_out')):
+    # with argscope(Conv2D, use_bias=False,
+    #               kernel_initializer=tf.variance_scaling_initializer(scale=2.0, mode='fan_out')):
+    with argscope([Conv2D, MaxPooling, GlobalAvgPooling, BatchNorm], data_format='channels_first'), \
+        argscope(Conv2D, kernel_initializer=tf.variance_scaling_initializer(scale=2.0, mode='fan_out'), 
+            use_bias=False):
         # Note that TF pads the image by [2, 3] instead of [3, 2].
         # Similar things happen in later stride=2 layers as well.
         l = Conv2D('conv0', image, 64, 7, strides=2, activation=BNReLU)
@@ -139,9 +142,10 @@ def resnet_backbone(image, num_blocks, group_func, block_func, classes=1000):
 
 def ResNet101(image, num_blocks=[3, 4, 23, 3], mode='preact', classes=5):
     block_func = getattr(sys.modules[__name__], mode + '_bottleneck', None)
-    return resnet_backbone(image, [3, 4, 23, 3], 
-                            preact_group if mode == 'preact' else resnet_group, 
-                            block_func, classes=classes)
+    image_channel_first = tf.transpose(image, [0, 3, 1, 2])
+    return resnet_backbone(image_channel_first, [3, 4, 23, 3], 
+                           preact_group if mode == 'preact' else resnet_group, 
+                           block_func, classes=classes)
 # self.num_blocks, self.block_func = {
 #             18: ([2, 2, 2, 2], basicblock),
 #             34: ([3, 4, 6, 3], basicblock),

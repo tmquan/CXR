@@ -20,12 +20,13 @@ import tensorflow as tf
 tf.disable_v2_behavior()
 from tensorlayer.cost import binary_cross_entropy, dice_coe
 
-from tensornets import DenseNet201 
+# from tensornets import DenseNet201 
 from models.shufflenet import ShuffleNet
-from models.densenet import DenseNet
+from models.densenet import DenseNet121
 from models.resnet import ResNet101
 from models.vgg16 import VGG16
 from models.inceptionbn import InceptionBN
+from models.capsnet import CapsNet
 
 
 def visualize_tensors(name, imgs, scale_func=lambda x: (x + 1.) * 128., max_outputs=1):
@@ -134,40 +135,44 @@ class Model(ModelDesc):
         image = image / 128.0 - 1.0
         # assert tf.test.is_gpu_available()
         # with tf.name_scope('cnn'):
-        if self.config.name == 'DenseNet121':
-            models = tn.DenseNet121(image, is_training=self.training, classes=self.config.types)
-            models.print_outputs()
-            output = tf.identity(models.logits)
-        elif self.config.name == 'DenseNet169':
-            models = tn.DenseNet169(image, is_training=self.training, classes=self.config.types)
-            models.print_outputs()
-            output = tf.identity(models.logits)
-        elif self.config.name == 'DenseNet201':
-            models = tn.DenseNet201(image, is_training=self.training, classes=self.config.types)
-            models.print_outputs()
-            output = tf.identity(models.logits)
+        # if self.config.name == 'DenseNet121':
+        #     models = tn.DenseNet121(image, is_training=self.training, classes=self.config.types)
+        #     models.print_outputs()
+        #     output = tf.identity(models.logits)
+        # elif self.config.name == 'DenseNet169':
+        #     models = tn.DenseNet169(image, is_training=self.training, classes=self.config.types)
+        #     models.print_outputs()
+        #     output = tf.identity(models.logits)
+        # elif self.config.name == 'DenseNet201':
+        #     models = tn.DenseNet201(image, is_training=self.training, classes=self.config.types)
+        #     models.print_outputs()
+        #     output = tf.identity(models.logits)
         # elif self.config.name == 'ResNet101':
         #     models = tn.ResNet101(image, is_training=self.training, classes=self.config.types)
         #     models.print_outputs()
-            output = tf.identity(models.logits)
-        elif self.config.name == 'InceptionResNet2':
-            models = tn.InceptionResNet2(image, is_training=self.training, classes=self.config.types)
-            models.print_outputs()
-            output = tf.identity(models.logits)
-        elif self.config.name == 'VGG19':
-            models = tn.VGG19(image, is_training=self.training, classes=self.config.types)
-            models.print_outputs()
-            output = tf.identity(models.logits)
-        elif self.config.name == 'VGG16':
+        #     output = tf.identity(models.logits)
+        # if self.config.name == 'InceptionResNet2':
+        #     models = tn.InceptionResNet2(image, is_training=self.training, classes=self.config.types)
+        #     models.print_outputs()
+        #     output = tf.identity(models.logits)
+        # elif self.config.name == 'VGG19':
+        #     models = tn.VGG19(image, is_training=self.training, classes=self.config.types)
+        #     models.print_outputs()
+        #     output = tf.identity(models.logits)
+        if self.config.name == 'VGG16':
             output = VGG16(image, classes=self.config.types)
         elif self.config.name == 'ShuffleNet':
             output = ShuffleNet(image, classes=self.config.types)
         elif self.config.name == 'ResNet101':
             output = ResNet101(image, mode=self.config.mode, classes=self.config.types)
-        elif self.config.name == 'DenseNet':
-            output = DenseNet(image, classes=self.config.types)
+        elif self.config.name == 'DenseNet121':
+            output = DenseNet121(image, classes=self.config.types)
         elif self.config.name == 'InceptionBN':
             output = InceptionBN(image, classes=self.config.types)
+        elif self.config.name == 'CapsNet':
+            cost = CapsNet(image, label, classes=self.config.types)
+
+            return cost
         else:
             pass
 
