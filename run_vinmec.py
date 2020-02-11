@@ -200,7 +200,6 @@ def eval(model, sessinit, dataflow):
         label = dp[1]
         # batch_size = estim.shape[0]
         estim = evaluator(image, label)[0]
-        print(estim.shape, label.shape)
         stat.feed((estim + 0.5).astype(np.int32), label)
 
     print('_precision: \t{}'.format(stat.precision))
@@ -300,7 +299,6 @@ if __name__ == '__main__':
         ds_test3 = PrintData(ds_test3)
 
         estims = pred(model, SmartInit(config.load), ds_test3)
-        print(estims.shape)
 
         # Read and write new csv
         fname = 'test.csv'
