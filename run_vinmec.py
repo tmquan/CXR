@@ -2,16 +2,20 @@
 # Author: Tran Minh Quan
 import cv2
 import numpy as np
-import tensornets as tn
+import pandas as pd
+from datetime import datetime
+
 from tensorpack import *
 from tensorpack.tfutils.summary import add_moving_summary, add_param_summary
 from tensorpack.tfutils.tower import get_current_tower_context
 from tensorpack.tfutils.scope_utils import under_name_scope
+from tensorpack.predict import FeedfreePredictor, PredictConfig
 from tensorpack.utils import logger
 from tensorpack.utils.gpu import get_num_gpu
 from tensorpack.utils.stats import BinaryStatistics
 import albumentations as AB
 import argparse
+import sys
 import os
 
 import tensorflow as tf
@@ -167,9 +171,62 @@ class Model(ModelDesc):
         return optim
 
 
-def eval():
+def eval(model, sessinit, dataflow):
+    """
+    Eval a classification model on the dataset. It assumes the model inputs are
+    named "input" and "label", and contains "logit" in the graph.
+    """
+    evaluator_config = PredictConfig(
+        model=model,
+        session_init=sessinit,
+        input_names=['image', 'label'],
+        output_names=['logit']
+    )
+
+    stat = BinaryStatistics()
+
+    # This does not have a visible improvement over naive predictor,
+    # but will have an improvement if image_dtype is set to float32.
+    # pred = FeedfreePredictor(pred_config, StagingInput(QueueInput(dataflow), device='/gpu:0'))
+    evaluator = OfflinePredictor(evaluator_config)
+    for dp in dataflow:
+        # estim = pred()[0]
+        image = dp[0]
+        label = dp[1]
+        # batch_size = estim.shape[0]
+        estim = evaluator(image, label)[0]
+        print(estim.shape, label.shape)
+        stat.feed((estim + 0.5).astype(np.int32), label)
+
+    print('_precision: \t{}'.format(stat.precision))
+    print('_recall: \t{}'.format(stat.recall))
+    print('_f1_score: \t{}'.format(2 * (stat.precision * stat.recall) / (1*stat.precision + stat.recall)))
+    print('_f2_score: \t{}'.format(5 * (stat.precision * stat.recall) / (4*stat.precision + stat.recall)))  
     pass
 
+def pred(model, sessinit, dataflow):
+    """
+    Eval a classification model on the dataset. It assumes the model inputs are
+    named "input" and "label", and contains "logit" in the graph.
+    """
+    predictor_config = PredictConfig(
+        model=model,
+        session_init=sessinit,
+        input_names=['image'],
+        output_names=['logit']
+    )
+
+    
+    predictor = OfflinePredictor(predictor_config)
+    estims = []
+    for dp in dataflow:
+        # estim = pred()[0]
+        image = dp[0]
+        # batch_size = estim.shape[0]
+        estim = predictor(image)[0]
+        estims.append(estim)
+
+    return np.squeeze(np.array(estims))
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
@@ -193,26 +250,87 @@ if __name__ == '__main__':
     model = Model(config=config)
 
     if config.eval:
-        pass
+        ds_test2 = Vinmec(folder=config.data, 
+                          is_train='valid', 
+                          fname='valid.csv', 
+                          types=config.types, 
+                          resize=int(config.shape))
+
+        ag_test2 = [
+            imgaug.ColorSpace(mode=cv2.COLOR_GRAY2RGB),
+            imgaug.Albumentations(AB.CLAHE(p=1)),
+            imgaug.ColorSpace(mode=cv2.COLOR_RGB2GRAY),
+            imgaug.ToFloat32(),
+        ]
+        ds_test2.reset_state()
+        ds_test2 = AugmentImageComponent(ds_test2, ag_test2, 0)
+        ds_test2 = BatchData(ds_test2, 1)
+        ds_test2 = PrintData(ds_test2)
+
+        eval(model, SmartInit(config.load), ds_test2)
+        sys.exit(0)
+
+    elif config.pred:
+        ds_test3 = Vinmec(folder=config.data, 
+                          is_train='test', 
+                          fname='test.csv', 
+                          types=config.types, 
+                          resize=int(config.shape))
+
+        ag_test3 = [
+            imgaug.ColorSpace(mode=cv2.COLOR_GRAY2RGB),
+            imgaug.Albumentations(AB.CLAHE(p=1)),
+            imgaug.ColorSpace(mode=cv2.COLOR_RGB2GRAY),
+            imgaug.ToFloat32(),
+        ]
+        ds_test3.reset_state()
+        ds_test3 = AugmentImageComponent(ds_test3, ag_test3, 0)
+        ds_test3 = BatchData(ds_test3, 1)
+        ds_test3 = PrintData(ds_test3)
+
+        estims = pred(model, SmartInit(config.load), ds_test3)
+        print(estims.shape)
+
+        # Read and write new csv
+        fname = 'test.csv'
+        csv_file = os.path.join(config.data, fname)
+        df = pd.read_csv(csv_file)
+        print(df)
+        
+        tname = 'test_{}.csv'.format(datetime.now().strftime("%Y-%m-%d_%H-%M-%S"))
+        print(tname)
+        # 0 ['Atelectasis'] 
+        # 1 ['Cardiomegaly']
+        # 2 ['Consolidation']
+        # 3 ['Edema']
+        # 4 ['Pleural Effusion']
+        df['Pleural_Effusion'] = pd.Series(estims[:,4], index=df.index)
+        df['Edema'] = pd.Series(estims[:,3], index=df.index)
+        df['Consolidation'] = pd.Series(estims[:,2], index=df.index)
+        df['Atelectasis'] = pd.Series(estims[:,0], index=df.index)
+        df['Cardiomegaly'] = pd.Series(estims[:,1], index=df.index)
+        df.to_csv(tname, index=False)
+        sys.exit(0)
+
     else:
         logger.set_logger_dir(os.path.join(
             config.save, config.name, config.mode, str(config.shape), str(config.types), ), 'd')
 
         # Setup the dataset for training
         ds_train = Vinmec(folder=config.data, 
-                          train_or_valid='train', 
+                          is_train='train', 
                           fname='train.csv', 
                           types=config.types, 
                           resize=int(config.shape))
         
         ds_valid = Vinmec(folder=config.data, 
-                          train_or_valid='train', 
+                          is_train='train', 
                           fname='valid.csv', 
                           types=config.types, 
                           resize=int(config.shape))
 
         ds_other = Vinmec(folder='/u01/data/CXR/CheXpert-v1.0-small/', 
-                          train_or_valid='train', 
+                          is_train='train', 
                           fname='valid_chexpert_vinmec_format.csv', 
                           types=config.types, 
                           resize=int(config.shape))
@@ -251,7 +369,7 @@ if __name__ == '__main__':
 
          # Setup the dataset for validating
         ds_test2 = Vinmec(folder=config.data, 
-                          train_or_valid='valid', 
+                          is_train='valid', 
                           fname='valid.csv', 
                           types=config.types, 
                           resize=int(config.shape))

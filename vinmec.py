@@ -15,7 +15,7 @@ from tensorpack.utils.argtools import shape2d
 class Vinmec(df.RNGDataFlow):
     # https://github.com/tensorpack/tensorpack/blob/master/tensorpack/dataflow/image.py
     """ Produce images read from a list of files as (h, w, c) arrays. """
-    def __init__(self, folder, types=14, train_or_valid='train', channel=1,
+    def __init__(self, folder, types=14, is_train='train', channel=1,
                  resize=None, debug=False, shuffle=False, fname='train.csv'):
         """[summary]
         [description
@@ -23,7 +23,7 @@ class Vinmec(df.RNGDataFlow):
             folder {[type]} -- [description]
         Keyword Arguments:
             types {number} -- [description] (default: {14})
-            train_or_valid {str} -- [description] (default: {'train'})
+            is_train {str} -- [description] (default: {'train'}, {'valid'} or {'test'})
             channel {number} -- [description] (default: {1})
             resize {[type]} -- [description] (default: {None})
             debug {bool} -- [description] (default: {False})
@@ -35,7 +35,7 @@ class Vinmec(df.RNGDataFlow):
         self.citation = "\n"
         self.folder = folder
         self.types = types
-        self.is_train = True if train_or_valid == 'train' else False
+        self.is_train = is_train
         self.channel = int(channel)
         assert self.channel in [1, 3], self.channel
         if self.channel == 1:
@@ -61,7 +61,7 @@ class Vinmec(df.RNGDataFlow):
 
     def __iter__(self):
         indices = list(range(self.__len__()))
-        if self.is_train:
+        if self.is_train == 'train':
             self.rng.shuffle(indices)
 
         for idx in indices:
@@ -77,21 +77,28 @@ class Vinmec(df.RNGDataFlow):
             if self.channel == 1:
                 image = image[:, :, np.newaxis]
 
-            label = []
-            if self.types == 5:
-                label.append(self.df.iloc[idx]['Atelectasis'])
-                label.append(self.df.iloc[idx]['Cardiomegaly'])
-                label.append(self.df.iloc[idx]['Consolidation'])
-                label.append(self.df.iloc[idx]['Edema'])
-                label.append(self.df.iloc[idx]['Pleural Effusion'])
-                # label.append(self.df.iloc[idx]['Pneumonia/infection'])
+            # Process the label
+            if self.is_train == 'train' or self.is_train == 'valid':
+                label = []
+                if self.types == 5:
+                    label.append(self.df.iloc[idx]['Atelectasis'])
+                    label.append(self.df.iloc[idx]['Cardiomegaly'])
+                    label.append(self.df.iloc[idx]['Consolidation'])
+                    label.append(self.df.iloc[idx]['Edema'])
+                    label.append(self.df.iloc[idx]['Pleural Effusion'])
+                    # label.append(self.df.iloc[idx]['Pneumonia/infection'])
+                else:
+                    pass
+                # Try catch exception
+                label = np.nan_to_num(label, copy=True, nan=0)
+                label = np.array(label, dtype=np.uint8)
+                types = label.copy()
+                yield [image, types]
+            elif self.is_train == 'test':
+                yield [image] # , np.array([-1, -1, -1, -1, -1])
             else:
                 pass
-            # Try catch exception
-            label = np.nan_to_num(label, copy=True, nan=0)
-            label = np.array(label, dtype=np.uint8)
-            types = label.copy()
-            yield [image, types]
+           
 
 if __name__ == '__main__':
     ds = Vinmec(folder='/u01/data/Vimmec_Data_small/',
