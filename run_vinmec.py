@@ -148,20 +148,20 @@ class Model(ModelDesc):
         else:
             pass
 
-        # tf.sigmoid(output, name='logit')
         logit = tf.sigmoid(output, name='logit')
         loss_xent = class_balanced_sigmoid_cross_entropy(
             output, label, name='loss_xent')
 
         # Visualization
+        visualize_tensors('image', [image], scale_func=lambda x: x *
+                          128.0 + 128.0, max_outputs=max(64, self.config.batch))
+        # Regularize the weight of model 
         wd_w = tf.train.exponential_decay(2e-4, get_global_step_var(),
                                           80000, 0.7, True)
         wd_cost = tf.multiply(wd_w, regularize_cost(
             '.*/W', tf.nn.l2_loss), name='wd_cost')
 
         add_param_summary(('.*/W', ['histogram']))   # monitor W
-        visualize_tensors('image', [image], scale_func=lambda x: x *
-                          128.0 + 128.0, max_outputs=max(64, self.config.batch))
         cost = tf.add_n([loss_xent, wd_cost], name='cost')
         add_moving_summary(loss_xent)
         add_moving_summary(wd_cost)
@@ -171,7 +171,6 @@ class Model(ModelDesc):
     def optimizer(self):
         lrate = tf.get_variable(
             'learning_rate', initializer=0.01, trainable=False)
-        # optim = tf.train.MomentumOptimizer(lrate, 0.9, use_nesterov=True)
         optim = tf.train.AdamOptimizer(lrate, beta1=0.5, epsilon=1e-3)
         return optim
 
@@ -192,13 +191,10 @@ def eval(model, sessinit, dataflow):
 
     # This does not have a visible improvement over naive predictor,
     # but will have an improvement if image_dtype is set to float32.
-    # pred = FeedfreePredictor(pred_config, StagingInput(QueueInput(dataflow), device='/gpu:0'))
     evaluator = OfflinePredictor(evaluator_config)
     for dp in dataflow:
-        # estim = pred()[0]
         image = dp[0]
         label = dp[1]
-        # batch_size = estim.shape[0]
         estim = evaluator(image, label)[0]
         stat.feed((estim + 0.5).astype(np.int32), label)
 
@@ -214,7 +210,7 @@ def eval(model, sessinit, dataflow):
 def pred(model, sessinit, dataflow):
     """
     Eval a classification model on the dataset. It assumes the model inputs are
-    named "input" and "label", and contains "logit" in the graph.
+    named "input", and contains "logit" in the graph.
     """
     predictor_config = PredictConfig(
         model=model,
@@ -226,9 +222,7 @@ def pred(model, sessinit, dataflow):
     predictor = OfflinePredictor(predictor_config)
     estims = []
     for dp in dataflow:
-        # estim = pred()[0]
         image = dp[0]
-        # batch_size = estim.shape[0]
         estim = predictor(image)[0]
         estims.append(estim)
 
