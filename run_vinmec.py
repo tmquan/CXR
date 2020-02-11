@@ -28,6 +28,7 @@ from models.densenet import DenseNet121
 from models.resnet import ResNet101
 from models.vgg16 import VGG16
 
+
 def visualize_tensors(name, imgs, scale_func=lambda x: (x + 1.) * 128., max_outputs=1):
     """Generate tensor for TensorBoard (casting, clipping)
     Args:
@@ -48,6 +49,7 @@ class CustomBinaryClassificationStats(Inferencer):
     Compute precision / recall in binary classification, given the
     prediction vector and the label vector.
     """
+
     def __init__(self, pred_tensor_name, label_tensor_name, prefix='validation'):
         """
         Args:
@@ -74,8 +76,8 @@ class CustomBinaryClassificationStats(Inferencer):
     def _after_inference(self):
         return {self.prefix + '_precision': self.stat.precision,
                 self.prefix + '_recall': self.stat.recall,
-                self.prefix + '_f1_score': 2 * (self.stat.precision * self.stat.recall) / (1*self.stat.precision + self.stat.recall),
-                self.prefix + '_f2_score': 5 * (self.stat.precision * self.stat.recall) / (4*self.stat.precision + self.stat.recall),
+                self.prefix + '_f1_score': 2 * (self.stat.precision * self.stat.recall) / (1 * self.stat.precision + self.stat.recall),
+                self.prefix + '_f2_score': 5 * (self.stat.precision * self.stat.recall) / (4 * self.stat.precision + self.stat.recall),
                 }
 
 
@@ -98,12 +100,11 @@ def class_balanced_sigmoid_cross_entropy(logits, label, name='cross_entropy_loss
         beta = count_neg / (count_neg + count_pos)
 
         pos_weight = beta / (1 - beta)
-        cost = tf.nn.weighted_cross_entropy_with_logits(logits=logits, targets=y, pos_weight=pos_weight)
+        cost = tf.nn.weighted_cross_entropy_with_logits(
+            logits=logits, targets=y, pos_weight=pos_weight)
         cost = tf.reduce_mean(cost * (1 - beta))
         zero = tf.equal(count_pos, 0.0)
     return tf.where(zero, 0.0, cost, name=name)
-
-
 
 
 class Model(ModelDesc):
@@ -132,13 +133,14 @@ class Model(ModelDesc):
 
     def build_graph(self, image, label):
         image = image / 128.0 - 1.0
-        
+
         if self.config.name == 'VGG16':
             output = VGG16(image, classes=self.config.types)
         elif self.config.name == 'ShuffleNet':
             output = ShuffleNet(image, classes=self.config.types)
         elif self.config.name == 'ResNet101':
-            output = ResNet101(image, mode=self.config.mode, classes=self.config.types)
+            output = ResNet101(image, mode=self.config.mode,
+                               classes=self.config.types)
         elif self.config.name == 'DenseNet121':
             output = DenseNet121(image, classes=self.config.types)
         elif self.config.name == 'InceptionBN':
@@ -146,18 +148,20 @@ class Model(ModelDesc):
         else:
             pass
 
-
-
-        logit = tf.sigmoid(output, name='logit') #tf.sigmoid(output, name='logit')
-        loss_xent = class_balanced_sigmoid_cross_entropy(output, label, name='loss_xent')
+        # tf.sigmoid(output, name='logit')
+        logit = tf.sigmoid(output, name='logit')
+        loss_xent = class_balanced_sigmoid_cross_entropy(
+            output, label, name='loss_xent')
 
         # Visualization
         wd_w = tf.train.exponential_decay(2e-4, get_global_step_var(),
                                           80000, 0.7, True)
-        wd_cost = tf.multiply(wd_w, regularize_cost('.*/W', tf.nn.l2_loss), name='wd_cost')
+        wd_cost = tf.multiply(wd_w, regularize_cost(
+            '.*/W', tf.nn.l2_loss), name='wd_cost')
 
         add_param_summary(('.*/W', ['histogram']))   # monitor W
-        visualize_tensors('image', [image], scale_func=lambda x: x * 128.0 + 128.0, max_outputs=max(64, self.config.batch))
+        visualize_tensors('image', [image], scale_func=lambda x: x *
+                          128.0 + 128.0, max_outputs=max(64, self.config.batch))
         cost = tf.add_n([loss_xent, wd_cost], name='cost')
         add_moving_summary(loss_xent)
         add_moving_summary(wd_cost)
@@ -165,7 +169,8 @@ class Model(ModelDesc):
         return cost
 
     def optimizer(self):
-        lrate = tf.get_variable('learning_rate', initializer=0.01, trainable=False)
+        lrate = tf.get_variable(
+            'learning_rate', initializer=0.01, trainable=False)
         # optim = tf.train.MomentumOptimizer(lrate, 0.9, use_nesterov=True)
         optim = tf.train.AdamOptimizer(lrate, beta1=0.5, epsilon=1e-3)
         return optim
@@ -200,9 +205,12 @@ def eval(model, sessinit, dataflow):
 
     print('_precision: \t{}'.format(stat.precision))
     print('_recall: \t{}'.format(stat.recall))
-    print('_f1_score: \t{}'.format(2 * (stat.precision * stat.recall) / (1*stat.precision + stat.recall)))
-    print('_f2_score: \t{}'.format(5 * (stat.precision * stat.recall) / (4*stat.precision + stat.recall)))  
+    print('_f1_score: \t{}'.format(2 * (stat.precision *
+                                        stat.recall) / (1 * stat.precision + stat.recall)))
+    print('_f2_score: \t{}'.format(5 * (stat.precision *
+                                        stat.recall) / (4 * stat.precision + stat.recall)))
     pass
+
 
 def pred(model, sessinit, dataflow):
     """
@@ -216,7 +224,6 @@ def pred(model, sessinit, dataflow):
         output_names=['logit']
     )
 
-    
     predictor = OfflinePredictor(predictor_config)
     estims = []
     for dp in dataflow:
@@ -230,14 +237,18 @@ def pred(model, sessinit, dataflow):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('--gpus', help='comma separated list of GPU(s) to use.')
+    parser.add_argument(
+        '--gpus', help='comma separated list of GPU(s) to use.')
     parser.add_argument('--name', help='Model name', default='DenseNet121')
     parser.add_argument('--eval', action='store_true', help='run evaluation')
     parser.add_argument('--pred', action='store_true', help='run prediction')
     parser.add_argument('--load', help='load model')
-    parser.add_argument('--data', default='/u01/data/Vimmec_Data_small/', help='Data directory')
-    parser.add_argument('--save', default='train_log/', help='Saving directory')
-    parser.add_argument('--mode', default='none', help='Additional mode of resnet')
+    parser.add_argument(
+        '--data', default='/u01/data/Vimmec_Data_small/', help='Data directory')
+    parser.add_argument('--save', default='train_log/',
+                        help='Saving directory')
+    parser.add_argument('--mode', default='none',
+                        help='Additional mode of resnet')
     parser.add_argument('--types', type=int, default=5)
     parser.add_argument('--batch', type=int, default=64)
     parser.add_argument('--shape', type=int, default=256)
@@ -250,10 +261,10 @@ if __name__ == '__main__':
     model = Model(config=config)
 
     if config.eval:
-        ds_test2 = Vinmec(folder=config.data, 
-                          is_train='valid', 
-                          fname='valid.csv', 
-                          types=config.types, 
+        ds_test2 = Vinmec(folder=config.data,
+                          is_train='valid',
+                          fname='valid.csv',
+                          types=config.types,
                           resize=int(config.shape))
 
         ag_test2 = [
@@ -271,10 +282,10 @@ if __name__ == '__main__':
         sys.exit(0)
 
     elif config.pred:
-        ds_test3 = Vinmec(folder=config.data, 
-                          is_train='test', 
-                          fname='test.csv', 
-                          types=config.types, 
+        ds_test3 = Vinmec(folder=config.data,
+                          is_train='test',
+                          fname='test.csv',
+                          types=config.types,
                           resize=int(config.shape))
 
         ag_test3 = [
@@ -296,19 +307,20 @@ if __name__ == '__main__':
         csv_file = os.path.join(config.data, fname)
         df = pd.read_csv(csv_file)
         print(df)
-        
-        tname = 'test_{}.csv'.format(datetime.now().strftime("%Y-%m-%d_%H-%M-%S"))
+
+        tname = 'test_{}.csv'.format(
+            datetime.now().strftime("%Y-%m-%d_%H-%M-%S"))
         print(tname)
-        # 0 ['Atelectasis'] 
+        # 0 ['Atelectasis']
         # 1 ['Cardiomegaly']
         # 2 ['Consolidation']
         # 3 ['Edema']
         # 4 ['Pleural Effusion']
-        df['Pleural_Effusion'] = pd.Series(estims[:,4], index=df.index)
-        df['Edema'] = pd.Series(estims[:,3], index=df.index)
-        df['Consolidation'] = pd.Series(estims[:,2], index=df.index)
-        df['Atelectasis'] = pd.Series(estims[:,0], index=df.index)
-        df['Cardiomegaly'] = pd.Series(estims[:,1], index=df.index)
+        df['Pleural_Effusion'] = pd.Series(estims[:, 4], index=df.index)
+        df['Edema'] = pd.Series(estims[:, 3], index=df.index)
+        df['Consolidation'] = pd.Series(estims[:, 2], index=df.index)
+        df['Atelectasis'] = pd.Series(estims[:, 0], index=df.index)
+        df['Cardiomegaly'] = pd.Series(estims[:, 1], index=df.index)
         df.to_csv(tname, index=False)
         sys.exit(0)
 
@@ -317,24 +329,23 @@ if __name__ == '__main__':
             config.save, config.name, config.mode, str(config.shape), str(config.types), ), 'd')
 
         # Setup the dataset for training
-        ds_train = Vinmec(folder=config.data, 
-                          is_train='train', 
-                          fname='train.csv', 
-                          types=config.types, 
-                          resize=int(config.shape))
-        
-        ds_valid = Vinmec(folder=config.data, 
-                          is_train='train', 
-                          fname='valid.csv', 
-                          types=config.types, 
+        ds_train = Vinmec(folder=config.data,
+                          is_train='train',
+                          fname='train.csv',
+                          types=config.types,
                           resize=int(config.shape))
 
-        ds_other = Vinmec(folder='/u01/data/CXR/CheXpert-v1.0-small/', 
-                          is_train='train', 
-                          fname='valid_chexpert_vinmec_format.csv', 
-                          types=config.types, 
+        ds_valid = Vinmec(folder=config.data,
+                          is_train='train',
+                          fname='valid.csv',
+                          types=config.types,
                           resize=int(config.shape))
-        
+
+        ds_other = Vinmec(folder='/u01/data/CXR/CheXpert-v1.0-small/',
+                          is_train='train',
+                          fname='valid_chexpert_vinmec_format.csv',
+                          types=config.types,
+                          resize=int(config.shape))
 
         ds_train = ConcatData([ds_train, ds_valid, ds_other])
         ag_train = [
@@ -348,7 +359,8 @@ if __name__ == '__main__':
                 [imgaug.BrightnessScale((0.6, 1.4), clip=False),
                  imgaug.Contrast((0.6, 1.4), clip=False),
                  imgaug.Saturation(0.4, rgb=False),
-                 # rgb-bgr conversion for the constants copied from fb.resnet.torch
+                 # rgb-bgr conversion for the constants copied from
+                 # fb.resnet.torch
                  imgaug.Lighting(0.1,
                                  eigval=np.asarray(
                                      [0.2175, 0.0188, 0.0045][::-1]) * 255.0,
@@ -367,11 +379,11 @@ if __name__ == '__main__':
         ds_train = MultiProcessRunnerZMQ(ds_train, num_proc=2)
         ds_train = PrintData(ds_train)
 
-         # Setup the dataset for validating
-        ds_test2 = Vinmec(folder=config.data, 
-                          is_train='valid', 
-                          fname='valid.csv', 
-                          types=config.types, 
+        # Setup the dataset for validating
+        ds_test2 = Vinmec(folder=config.data,
+                          is_train='valid',
+                          fname='valid.csv',
+                          types=config.types,
                           resize=int(config.shape))
 
         ag_test2 = [
@@ -386,7 +398,6 @@ if __name__ == '__main__':
         # ds_test2 = MultiProcessRunnerZMQ(ds_test2, num_proc=1)
         ds_test2 = PrintData(ds_test2)
 
-       
         # Setup the config
         config = TrainConfig(
             model=model,
@@ -395,7 +406,7 @@ if __name__ == '__main__':
                 PeriodicTrigger(ModelSaver(), every_k_epochs=5),
                 PeriodicTrigger(MinSaver('cost'), every_k_epochs=10),
                 ScheduledHyperParamSetter('learning_rate',
-                                          [(0, 1e-2), (20, 1e-3), (50, 1e-4), (100, 1e-5)]), 
+                                          [(0, 1e-2), (20, 1e-3), (50, 1e-4), (100, 1e-5)]),
                 InferenceRunner(ds_test2, [CustomBinaryClassificationStats('logit', 'label'),
                                            ScalarStats('loss_xent'),
                                            ])

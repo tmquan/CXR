@@ -15,6 +15,7 @@ from tensorpack.utils.argtools import shape2d
 class Vinmec(df.RNGDataFlow):
     # https://github.com/tensorpack/tensorpack/blob/master/tensorpack/dataflow/image.py
     """ Produce images read from a list of files as (h, w, c) arrays. """
+
     def __init__(self, folder, types=14, is_train='train', channel=1,
                  resize=None, debug=False, shuffle=False, fname='train.csv'):
         """[summary]
@@ -95,10 +96,10 @@ class Vinmec(df.RNGDataFlow):
                 types = label.copy()
                 yield [image, types]
             elif self.is_train == 'test':
-                yield [image] # , np.array([-1, -1, -1, -1, -1])
+                yield [image]  # , np.array([-1, -1, -1, -1, -1])
             else:
                 pass
-           
+
 
 if __name__ == '__main__':
     ds = Vinmec(folder='/u01/data/Vimmec_Data_small/',
