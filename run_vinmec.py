@@ -11,23 +11,18 @@ from tensorpack.utils import logger
 from tensorpack.utils.gpu import get_num_gpu
 from tensorpack.utils.stats import BinaryStatistics
 import albumentations as AB
-from vinmec import Vinmec
 import argparse
 import os
 
-from absl import flags
 import tensorflow as tf
 tf.disable_v2_behavior()
-from tensorlayer.cost import binary_cross_entropy, dice_coe
 
-# from tensornets import DenseNet201 
+from vinmec import Vinmec
+from models.inceptionbn import InceptionBN
 from models.shufflenet import ShuffleNet
 from models.densenet import DenseNet121
 from models.resnet import ResNet101
 from models.vgg16 import VGG16
-from models.inceptionbn import InceptionBN
-from models.capsnet import CapsNet
-
 
 def visualize_tensors(name, imgs, scale_func=lambda x: (x + 1.) * 128., max_outputs=1):
     """Generate tensor for TensorBoard (casting, clipping)
@@ -133,32 +128,7 @@ class Model(ModelDesc):
 
     def build_graph(self, image, label):
         image = image / 128.0 - 1.0
-        # assert tf.test.is_gpu_available()
-        # with tf.name_scope('cnn'):
-        # if self.config.name == 'DenseNet121':
-        #     models = tn.DenseNet121(image, is_training=self.training, classes=self.config.types)
-        #     models.print_outputs()
-        #     output = tf.identity(models.logits)
-        # elif self.config.name == 'DenseNet169':
-        #     models = tn.DenseNet169(image, is_training=self.training, classes=self.config.types)
-        #     models.print_outputs()
-        #     output = tf.identity(models.logits)
-        # elif self.config.name == 'DenseNet201':
-        #     models = tn.DenseNet201(image, is_training=self.training, classes=self.config.types)
-        #     models.print_outputs()
-        #     output = tf.identity(models.logits)
-        # elif self.config.name == 'ResNet101':
-        #     models = tn.ResNet101(image, is_training=self.training, classes=self.config.types)
-        #     models.print_outputs()
-        #     output = tf.identity(models.logits)
-        # if self.config.name == 'InceptionResNet2':
-        #     models = tn.InceptionResNet2(image, is_training=self.training, classes=self.config.types)
-        #     models.print_outputs()
-        #     output = tf.identity(models.logits)
-        # elif self.config.name == 'VGG19':
-        #     models = tn.VGG19(image, is_training=self.training, classes=self.config.types)
-        #     models.print_outputs()
-        #     output = tf.identity(models.logits)
+        
         if self.config.name == 'VGG16':
             output = VGG16(image, classes=self.config.types)
         elif self.config.name == 'ShuffleNet':
@@ -169,10 +139,6 @@ class Model(ModelDesc):
             output = DenseNet121(image, classes=self.config.types)
         elif self.config.name == 'InceptionBN':
             output = InceptionBN(image, classes=self.config.types)
-        elif self.config.name == 'CapsNet':
-            cost = CapsNet(image, label, classes=self.config.types)
-
-            return cost
         else:
             pass
 
@@ -238,6 +204,21 @@ if __name__ == '__main__':
                           fname='train.csv', 
                           types=config.types, 
                           resize=int(config.shape))
+        
+        ds_valid = Vinmec(folder=config.data, 
+                          train_or_valid='train', 
+                          fname='valid.csv', 
+                          types=config.types, 
+                          resize=int(config.shape))
+
+        ds_other = Vinmec(folder='/u01/data/CXR/CheXpert-v1.0-small/', 
+                          train_or_valid='train', 
+                          fname='valid_chexpert_vinmec_format.csv', 
+                          types=config.types, 
+                          resize=int(config.shape))
+        
+
+        ds_train = ConcatData([ds_train, ds_valid, ds_other])
         ag_train = [
             imgaug.ColorSpace(mode=cv2.COLOR_GRAY2RGB),
             imgaug.RotationAndCropValid(max_deg=25),
@@ -262,41 +243,6 @@ if __name__ == '__main__':
             imgaug.ColorSpace(mode=cv2.COLOR_RGB2GRAY),
             imgaug.ToFloat32(),
         ]
-        # ds_train.reset_state()
-        # ds_train = AugmentImageComponent(ds_train, ag_train, 0)
-        # ds_train = BatchData(ds_train, config.batch)
-        # ds_train = MultiProcessRunnerZMQ(ds_train, num_proc=2)
-        # ds_train = PrintData(ds_train)
-        # ds_train = FixedSizeData(ds_train, 200) # For debugging purpose
-
-        # Setup the dataset for validating
-        ds_valid = Vinmec(folder=config.data, train_or_valid='train', fname='valid.csv', types=config.types, resize=int(config.shape))
-
-        # ag_valid = [
-        #     imgaug.ColorSpace(mode=cv2.COLOR_GRAY2RGB),
-        #     imgaug.RotationAndCropValid(max_deg=25),
-        #     # imgaug.Albumentations(AB.CLAHE(p=1)),
-        #     imgaug.GoogleNetRandomCropAndResize(crop_area_fraction=(0.6, 1.0),
-        #                                         aspect_ratio_range=(0.8, 1.2),
-        #                                         interp=cv2.INTER_LINEAR, target_shape=config.shape),
-        #     imgaug.ColorSpace(mode=cv2.COLOR_RGB2GRAY),
-        #     imgaug.ToFloat32(),
-        # ]
-        # ds_valid.reset_state()
-        # ds_valid = AugmentImageComponent(ds_valid, ag_valid, 0)
-        # ds_valid = BatchData(ds_valid, config.batch)
-        # # ds_valid = MultiProcessRunnerZMQ(ds_valid, num_proc=1)
-        # ds_valid = PrintData(ds_valid)
-
-        ds_other = Vinmec(folder='/u01/data/CXR/CheXpert-v1.0-small/', 
-                          train_or_valid='train', 
-                          fname='valid_chexpert_vinmec_format.csv', 
-                          types=config.types, 
-                          resize=int(config.shape))
-        
-
-        ds_train = ConcatData([ds_train, ds_valid, ds_other])
-        # ds_train = LocallyShuffleData(ds_train)
         ds_train.reset_state()
         ds_train = AugmentImageComponent(ds_train, ag_train, 0)
         ds_train = BatchData(ds_train, config.batch)
@@ -331,7 +277,7 @@ if __name__ == '__main__':
                 PeriodicTrigger(ModelSaver(), every_k_epochs=5),
                 PeriodicTrigger(MinSaver('cost'), every_k_epochs=10),
                 ScheduledHyperParamSetter('learning_rate',
-                                          [(0, 1e-2), (20, 1e-3), (50, 1e-4), (100, 1e-5)]), #, interp='linear'
+                                          [(0, 1e-2), (20, 1e-3), (50, 1e-4), (100, 1e-5)]), 
                 InferenceRunner(ds_test2, [CustomBinaryClassificationStats('logit', 'label'),
                                            ScalarStats('loss_xent'),
                                            ])
