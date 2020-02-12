@@ -1,6 +1,7 @@
 # coding=utf-8
 # Author: Tran Minh Quan
 import cv2
+import random
 import numpy as np
 import pandas as pd
 from datetime import datetime
