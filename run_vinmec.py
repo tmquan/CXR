@@ -17,6 +17,7 @@ import albumentations as AB
 import argparse
 import sys
 import os
+os.environ['TF_DETERMINISTIC_OPS'] = '1'
 
 import tensorflow as tf
 tf.disable_v2_behavior()
