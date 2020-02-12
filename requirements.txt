@@ -114,7 +114,6 @@ lazy-object-proxy==1.4.2
 libarchive-c==2.8
 lief==0.9.0
 lightgbm==2.3.1
-llvmlite==0.29.0
 locket==0.2.0
 lxml==4.2.6
 Markdown==3.1.1
