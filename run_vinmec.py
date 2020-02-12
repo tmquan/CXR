@@ -21,8 +21,8 @@ import os
 os.environ['TF_DETERMINISTIC_OPS'] = '1'
 
 import tensorflow as tf
-tf = tf.compat.v1
-# tf.disable_v2_behavior()
+# tf = tf.compat.v1
+tf.disable_v2_behavior()
 
 from vinmec import Vinmec
 from models.inceptionbn import InceptionBN
@@ -358,7 +358,7 @@ if __name__ == '__main__':
         ds_train.reset_state()
         ds_train = AugmentImageComponent(ds_train, ag_train, 0)
         ds_train = BatchData(ds_train, config.batch)
-        ds_train = MultiProcessRunnerZMQ(ds_train, num_proc=8)
+        ds_train = MultiProcessRunnerZMQ(ds_train, num_proc=2)
         ds_train = PrintData(ds_train)
 
         # Setup the dataset for validating
@@ -385,14 +385,10 @@ if __name__ == '__main__':
             model=model,
             dataflow=ds_train,
             callbacks=[
-                PeriodicTrigger(ModelSaver(), every_k_epochs=1),
-                PeriodicTrigger(MinSaver('cost'), every_k_epochs=2),
-                PeriodicTrigger(MinSaver('validation_precision'), every_k_epochs=2),
-                PeriodicTrigger(MinSaver('validation_recall'), every_k_epochs=2),
-                PeriodicTrigger(MinSaver('validation_f1_score'), every_k_epochs=2),
-                PeriodicTrigger(MinSaver('validation_f2_score'), every_k_epochs=2),
+                ModelSaver(),
+                MinSaver('cost'),
                 ScheduledHyperParamSetter('learning_rate',
-                                          [(0, 1e-2), (20, 1e-3), (50, 1e-4), (100, 1e-5)]),
+                                          [(0, 1e-2), (20, 1e-3), (50, 1e-4), (100, 1e-5), (150, 1e-6)]),
                 InferenceRunner(ds_test2, [CustomBinaryClassificationStats('logit', 'label'),
                                            ScalarStats('loss_xent'),
                                            ])
