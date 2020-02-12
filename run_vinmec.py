@@ -236,7 +236,7 @@ if __name__ == '__main__':
         os.environ['PYTHONHASHSEED']=str(config.seed)
         random.seed(config.seed)
         np.random.seed(config.seed)
-        tf.random.set_seed(config.seed)
+        tf.random.set_random_seed(config.seed)
 
     if config.gpus:
         # os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
