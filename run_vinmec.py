@@ -108,25 +108,11 @@ def class_balanced_sigmoid_cross_entropy(logits, label, name='cross_entropy_loss
 
 
 class Model(ModelDesc):
-    """[summary]
-    [description]
-    Extends:
-        ModelDesc
-    """
-
     def __init__(self, config):
-        """[summary]
-        [description]
-        Keyword Arguments:
-            name {str} -- [description] (default: {'DenseNet121'})
-        """
         super(Model, self).__init__()
         self.config = config
 
     def inputs(self):
-        """[summary]
-        [description]
-        """
         return [tf.TensorSpec([None, self.config.shape, self.config.shape, 1], tf.float32, 'image'),
                 tf.TensorSpec([None, self.config.types], tf.float32, 'label')
                 ]
@@ -139,8 +125,7 @@ class Model(ModelDesc):
         elif self.config.name == 'ShuffleNet':
             output = ShuffleNet(image, classes=self.config.types)
         elif self.config.name == 'ResNet101':
-            output = ResNet101(image, mode=self.config.mode,
-                               classes=self.config.types)
+            output = ResNet101(image, mode=self.config.mode, classes=self.config.types)
         elif self.config.name == 'DenseNet121':
             output = DenseNet121(image, classes=self.config.types)
         elif self.config.name == 'InceptionBN':
@@ -149,17 +134,15 @@ class Model(ModelDesc):
             pass
 
         logit = tf.sigmoid(output, name='logit')
-        loss_xent = class_balanced_sigmoid_cross_entropy(
-            output, label, name='loss_xent')
+        loss_xent = class_balanced_sigmoid_cross_entropy(output, label, name='loss_xent')
 
         # Visualization
-        visualize_tensors('image', [image], scale_func=lambda x: x *
-                          128.0 + 128.0, max_outputs=max(64, self.config.batch))
+        visualize_tensors('image', [image], scale_func=lambda x: x * 128.0 + 128.0, 
+                          max_outputs=max(64, self.config.batch))
         # Regularize the weight of model 
         wd_w = tf.train.exponential_decay(2e-4, get_global_step_var(),
                                           80000, 0.7, True)
-        wd_cost = tf.multiply(wd_w, regularize_cost(
-            '.*/W', tf.nn.l2_loss), name='wd_cost')
+        wd_cost = tf.multiply(wd_w, regularize_cost('.*/W', tf.nn.l2_loss), name='wd_cost')
 
         add_param_summary(('.*/W', ['histogram']))   # monitor W
         cost = tf.add_n([loss_xent, wd_cost], name='cost')
@@ -169,8 +152,8 @@ class Model(ModelDesc):
         return cost
 
     def optimizer(self):
-        lrate = tf.get_variable(
-            'learning_rate', initializer=0.01, trainable=False)
+        lrate = tf.get_variable('learning_rate', initializer=0.01, trainable=False)
+        add_moving_summary(lrate)
         optim = tf.train.AdamOptimizer(lrate, beta1=0.5, epsilon=1e-3)
         return optim
 
@@ -233,20 +216,26 @@ if __name__ == '__main__':
     parser.add_argument(
         '--gpus', help='comma separated list of GPU(s) to use.')
     parser.add_argument('--name', help='Model name', default='DenseNet121')
+    parser.add_argument('--seed', type=int, default=2020)
     parser.add_argument('--eval', action='store_true', help='run evaluation')
     parser.add_argument('--pred', action='store_true', help='run prediction')
     parser.add_argument('--load', help='load model')
-    parser.add_argument(
-        '--data', default='/u01/data/Vimmec_Data_small/', help='Data directory')
-    parser.add_argument('--save', default='train_log/',
-                        help='Saving directory')
-    parser.add_argument('--mode', default='none',
-                        help='Additional mode of resnet')
+    parser.add_argument('--data', default='/u01/data/Vimmec_Data_small/', help='Data directory')
+    parser.add_argument('--save', default='train_log/', help='Saving directory')
+    parser.add_argument('--mode', default='none', help='Additional mode of resnet')
+    
     parser.add_argument('--types', type=int, default=5)
     parser.add_argument('--batch', type=int, default=64)
     parser.add_argument('--shape', type=int, default=256)
 
     config = parser.parse_args()
+
+    if config.seed:
+        os.environ['PYTHONHASHSEED']=str(config.seed)
+        random.seed(config.seed)
+        np.random.seed(config.seed)
+        tf.random.set_seed(config.seed)
+
     if config.gpus:
         # os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
         os.environ['CUDA_VISIBLE_DEVICES'] = config.gpus
@@ -299,9 +288,8 @@ if __name__ == '__main__':
         csv_file = os.path.join(config.data, fname)
         df = pd.read_csv(csv_file)
         print(df)
-
-        tname = 'test_{}.csv'.format(
-            datetime.now().strftime("%Y-%m-%d_%H-%M-%S"))
+        df = df['Images']
+        tname = 'test_{}.csv'.format(datetime.now().strftime("%Y-%m-%d_%H-%M-%S"))
         print(tname)
         # 0 ['Atelectasis']
         # 1 ['Cardiomegaly']
@@ -368,7 +356,7 @@ if __name__ == '__main__':
         ds_train.reset_state()
         ds_train = AugmentImageComponent(ds_train, ag_train, 0)
         ds_train = BatchData(ds_train, config.batch)
-        ds_train = MultiProcessRunnerZMQ(ds_train, num_proc=2)
+        ds_train = MultiProcessRunnerZMQ(ds_train, num_proc=8)
         ds_train = PrintData(ds_train)
 
         # Setup the dataset for validating
@@ -395,8 +383,12 @@ if __name__ == '__main__':
             model=model,
             dataflow=ds_train,
             callbacks=[
-                PeriodicTrigger(ModelSaver(), every_k_epochs=5),
-                PeriodicTrigger(MinSaver('cost'), every_k_epochs=10),
+                PeriodicTrigger(ModelSaver(), every_k_epochs=1),
+                PeriodicTrigger(MinSaver('cost'), every_k_epochs=2),
+                PeriodicTrigger(MinSaver('validation_precision'), every_k_epochs=2),
+                PeriodicTrigger(MinSaver('validation_recall'), every_k_epochs=2),
+                PeriodicTrigger(MinSaver('validation_f1_score'), every_k_epochs=2),
+                PeriodicTrigger(MinSaver('validation_f2_score'), every_k_epochs=2),
                 ScheduledHyperParamSetter('learning_rate',
                                           [(0, 1e-2), (20, 1e-3), (50, 1e-4), (100, 1e-5)]),
                 InferenceRunner(ds_test2, [CustomBinaryClassificationStats('logit', 'label'),
