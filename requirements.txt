@@ -250,8 +250,6 @@ sympy==1.4
 tables==3.5.2
 tabulate==0.8.5
 tblib==1.4.0
-tensorboard==2.1.0
-tensorflow==1.15.2
 tensorflow-gpu==1.15.2
 tensorflow-determinism
 tensorpack==0.9.8
