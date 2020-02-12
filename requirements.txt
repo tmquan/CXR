@@ -249,8 +249,8 @@ sympy==1.4
 tables==3.5.2
 tabulate==0.8.5
 tblib==1.4.0
-tensorflow-gpu==1.15.2
-tensorflow-determinism
+tensorflow-gpu==2.1.0
+tensorflow-determinism==0.3.0
 tensorpack==0.9.8
 termcolor==1.1.0
 terminado==0.8.2

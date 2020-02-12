@@ -21,7 +21,8 @@ import os
 os.environ['TF_DETERMINISTIC_OPS'] = '1'
 
 import tensorflow as tf
-tf.disable_v2_behavior()
+tf = tf.compat.v1
+# tf.disable_v2_behavior()
 
 from vinmec import Vinmec
 from models.inceptionbn import InceptionBN
