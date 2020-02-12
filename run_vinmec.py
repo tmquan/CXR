@@ -215,8 +215,7 @@ def pred(model, sessinit, dataflow):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument(
-        '--gpus', help='comma separated list of GPU(s) to use.')
+    parser.add_argument('--gpus', default='0', help='comma separated list of GPU(s) to use.')
     parser.add_argument('--name', help='Model name', default='DenseNet121')
     parser.add_argument('--seed', type=int, default=2020)
     parser.add_argument('--eval', action='store_true', help='run evaluation')
