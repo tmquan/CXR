@@ -124,20 +124,20 @@ class Model(ModelDesc):
         image = image / 128.0 - 1.0
 
         if self.config.name == 'VGG16':
-            output = VGG16(image, classes=self.config.types)
+            logit = VGG16(image, classes=self.config.types)
         elif self.config.name == 'ShuffleNet':
-            output = ShuffleNet(image, classes=self.config.types)
+            logit = ShuffleNet(image, classes=self.config.types)
         elif self.config.name == 'ResNet101':
-            output = ResNet101(image, mode=self.config.mode, classes=self.config.types)
+            logit = ResNet101(image, mode=self.config.mode, classes=self.config.types)
         elif self.config.name == 'DenseNet121':
-            output = DenseNet121(image, classes=self.config.types)
+            logit = DenseNet121(image, classes=self.config.types)
         elif self.config.name == 'InceptionBN':
-            output = InceptionBN(image, classes=self.config.types)
+            logit = InceptionBN(image, classes=self.config.types)
         else:
             pass
 
-        logit = tf.sigmoid(output, name='logit')
-        loss_xent = class_balanced_sigmoid_cross_entropy(output, label, name='loss_xent')
+        estim = tf.sigmoid(logit, name='estim')
+        loss_xent = class_balanced_sigmoid_cross_entropy(logit, label, name='loss_xent')
 
         # Visualization
         visualize_tensors('image', [image], scale_func=lambda x: x * 128.0 + 128.0, 
@@ -170,7 +170,7 @@ def eval(model, sessinit, dataflow):
         model=model,
         session_init=sessinit,
         input_names=['image', 'label'],
-        output_names=['logit']
+        output_names=['estim']
     )
 
     stat = BinaryStatistics()
@@ -186,10 +186,8 @@ def eval(model, sessinit, dataflow):
 
     print('_precision: \t{}'.format(stat.precision))
     print('_recall: \t{}'.format(stat.recall))
-    print('_f1_score: \t{}'.format(2 * (stat.precision *
-                                        stat.recall) / (1 * stat.precision + stat.recall)))
-    print('_f2_score: \t{}'.format(5 * (stat.precision *
-                                        stat.recall) / (4 * stat.precision + stat.recall)))
+    print('_f1_score: \t{}'.format(2 * (stat.precision * stat.recall) / (1 * stat.precision + stat.recall)))
+    print('_f2_score: \t{}'.format(5 * (stat.precision * stat.recall) / (4 * stat.precision + stat.recall)))
     pass
 
 
@@ -202,7 +200,7 @@ def pred(model, sessinit, dataflow):
         model=model,
         session_init=sessinit,
         input_names=['image'],
-        output_names=['logit']
+        output_names=['estim']
     )
 
     predictor = OfflinePredictor(predictor_config)
@@ -245,24 +243,24 @@ if __name__ == '__main__':
     model = Model(config=config)
 
     if config.eval:
-        ds_test2 = Vinmec(folder=config.data,
+        ds_valid = Vinmec(folder=config.data,
                           is_train='valid',
                           fname='valid.csv',
                           types=config.types,
                           resize=int(config.shape))
 
-        ag_test2 = [
+        ag_valid = [
             imgaug.ColorSpace(mode=cv2.COLOR_GRAY2RGB),
             imgaug.Albumentations(AB.CLAHE(p=1)),
             imgaug.ColorSpace(mode=cv2.COLOR_RGB2GRAY),
             imgaug.ToFloat32(),
         ]
-        ds_test2.reset_state()
-        ds_test2 = AugmentImageComponent(ds_test2, ag_test2, 0)
-        ds_test2 = BatchData(ds_test2, 1)
-        ds_test2 = PrintData(ds_test2)
+        ds_valid.reset_state()
+        ds_valid = AugmentImageComponent(ds_valid, ag_valid, 0)
+        ds_valid = BatchData(ds_valid, 1)
+        ds_valid = PrintData(ds_valid)
 
-        eval(model, SmartInit(config.load), ds_test2)
+        eval(model, SmartInit(config.load), ds_valid)
         sys.exit(0)
 
     elif config.pred:
@@ -317,23 +315,22 @@ if __name__ == '__main__':
                           types=config.types,
                           resize=int(config.shape))
 
-        ds_valid = Vinmec(folder=config.data,
-                          is_train='train',
-                          fname='valid.csv',
-                          types=config.types,
-                          resize=int(config.shape))
+        # ds_valid = Vinmec(folder=config.data,
+        #                   is_train='train',
+        #                   fname='valid.csv',
+        #                   types=config.types,
+        #                   resize=int(config.shape))
 
-        ds_other = Vinmec(folder='/u01/data/CXR/CheXpert-v1.0-small/',
-                          is_train='train',
-                          fname='valid_chexpert_vinmec_format.csv',
-                          types=config.types,
-                          resize=int(config.shape))
+        # ds_other = Vinmec(folder='/u01/data/CXR/CheXpert-v1.0-small/',
+        #                   is_train='train',
+        #                   fname='valid_chexpert_vinmec_format.csv',
+        #                   types=config.types,
+        #                   resize=int(config.shape))
 
-        ds_train = ConcatData([ds_train, ds_valid, ds_other])
+        # ds_train = ConcatData([ds_train, ds_valid, ds_other])
         ag_train = [
             imgaug.ColorSpace(mode=cv2.COLOR_GRAY2RGB),
             imgaug.RotationAndCropValid(max_deg=25),
-            imgaug.Albumentations(AB.CLAHE(p=0.5)),
             imgaug.GoogleNetRandomCropAndResize(crop_area_fraction=(0.8, 1.0),
                                                 aspect_ratio_range=(0.8, 1.2),
                                                 interp=cv2.INTER_LINEAR, target_shape=config.shape),
@@ -352,6 +349,7 @@ if __name__ == '__main__':
                                       [-0.5836, -0.6948, 0.4203]],
                                      dtype='float32')[::-1, ::-1]
                                  )]),
+            imgaug.Albumentations(AB.CLAHE(p=1.0)),
             imgaug.ColorSpace(mode=cv2.COLOR_RGB2GRAY),
             imgaug.ToFloat32(),
         ]
@@ -362,23 +360,23 @@ if __name__ == '__main__':
         ds_train = PrintData(ds_train)
 
         # Setup the dataset for validating
-        ds_test2 = Vinmec(folder=config.data,
+        ds_valid = Vinmec(folder=config.data,
                           is_train='valid',
                           fname='valid.csv',
                           types=config.types,
                           resize=int(config.shape))
 
-        ag_test2 = [
+        ag_valid = [
             imgaug.ColorSpace(mode=cv2.COLOR_GRAY2RGB),
             imgaug.Albumentations(AB.CLAHE(p=1)),
             imgaug.ColorSpace(mode=cv2.COLOR_RGB2GRAY),
             imgaug.ToFloat32(),
         ]
-        ds_test2.reset_state()
-        ds_test2 = AugmentImageComponent(ds_test2, ag_test2, 0)
-        ds_test2 = BatchData(ds_test2, config.batch)
-        # ds_test2 = MultiProcessRunnerZMQ(ds_test2, num_proc=1)
-        ds_test2 = PrintData(ds_test2)
+        ds_valid.reset_state()
+        ds_valid = AugmentImageComponent(ds_valid, ag_valid, 0)
+        ds_valid = BatchData(ds_valid, config.batch)
+        # ds_valid = MultiProcessRunnerZMQ(ds_valid, num_proc=1)
+        ds_valid = PrintData(ds_valid)
 
         # Setup the config
         config = TrainConfig(
@@ -388,8 +386,8 @@ if __name__ == '__main__':
                 ModelSaver(),
                 MinSaver('cost'),
                 ScheduledHyperParamSetter('learning_rate',
-                                          [(0, 1e-2), (20, 1e-3), (50, 1e-4), (100, 1e-5), (150, 1e-6)]),
-                InferenceRunner(ds_test2, [CustomBinaryClassificationStats('logit', 'label'),
+                                          [(0, 1e-2), (50, 1e-3), (100, 1e-4), (150, 1e-5), (200, 1e-6)]),
+                InferenceRunner(ds_valid, [CustomBinaryClassificationStats('estim', 'label'),
                                            ScalarStats('loss_xent'),
                                            ])
             ],
