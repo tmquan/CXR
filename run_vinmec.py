@@ -11,7 +11,7 @@ from tensorpack.tfutils.summary import add_moving_summary, add_param_summary
 from tensorpack.tfutils.tower import get_current_tower_context
 from tensorpack.tfutils.scope_utils import under_name_scope
 from tensorpack.predict import FeedfreePredictor, PredictConfig
-from tensorpack.utils import logger
+from tensorpack.utils import logger, fix_rng_seed
 from tensorpack.utils.gpu import get_num_gpu
 from tensorpack.utils.stats import BinaryStatistics
 import albumentations as AB
@@ -234,6 +234,7 @@ if __name__ == '__main__':
         os.environ['PYTHONHASHSEED']=str(config.seed)
         random.seed(config.seed)
         np.random.seed(config.seed)
+        fix_rng_seed(config.seed)
         tf.random.set_random_seed(config.seed)
 
     if config.gpus:
@@ -315,21 +316,9 @@ if __name__ == '__main__':
                           types=config.types,
                           resize=int(config.shape))
 
-        # ds_valid = Vinmec(folder=config.data,
-        #                   is_train='train',
-        #                   fname='valid.csv',
-        #                   types=config.types,
-        #                   resize=int(config.shape))
-
-        # ds_other = Vinmec(folder='/u01/data/CXR/CheXpert-v1.0-small/',
-        #                   is_train='train',
-        #                   fname='valid_chexpert_vinmec_format.csv',
-        #                   types=config.types,
-        #                   resize=int(config.shape))
-
-        # ds_train = ConcatData([ds_train, ds_valid, ds_other])
         ag_train = [
             imgaug.ColorSpace(mode=cv2.COLOR_GRAY2RGB),
+            imgaug.Albumentations(AB.CLAHE(p=0.5)),
             imgaug.RotationAndCropValid(max_deg=25),
             imgaug.GoogleNetRandomCropAndResize(crop_area_fraction=(0.8, 1.0),
                                                 aspect_ratio_range=(0.8, 1.2),
@@ -349,7 +338,6 @@ if __name__ == '__main__':
                                       [-0.5836, -0.6948, 0.4203]],
                                      dtype='float32')[::-1, ::-1]
                                  )]),
-            imgaug.Albumentations(AB.CLAHE(p=1.0)),
             imgaug.ColorSpace(mode=cv2.COLOR_RGB2GRAY),
             imgaug.ToFloat32(),
         ]
