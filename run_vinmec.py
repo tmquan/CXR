@@ -142,7 +142,7 @@ class Model(ModelDesc):
         # Visualization
         visualize_tensors('image', [image], scale_func=lambda x: x * 128.0 + 128.0, 
                           max_outputs=max(64, self.config.batch))
-        # Regularize the weight of model 
+        # Regularize the weight of model 
         wd_w = tf.train.exponential_decay(2e-4, get_global_step_var(),
                                           80000, 0.7, True)
         wd_cost = tf.multiply(wd_w, regularize_cost('.*/W', tf.nn.l2_loss), name='wd_cost')
