@@ -349,7 +349,7 @@ if __name__ == '__main__':
             imgaug.ToFloat32(),
         ]
         ag_label = [ # Label smoothing
-            imgaug.BrightnessScale((0.75, 1.25), clip=False),
+            imgaug.BrightnessScale((0.5, 1.0), clip=False),
         ]
         ds_train.reset_state()
         ds_train = AugmentImageComponent(ds_train, ag_train, 0)
