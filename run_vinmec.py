@@ -71,6 +71,9 @@ class CustomBinaryClassificationStats(Inferencer):
 
     def _on_fetches(self, outputs):
         pred, label = outputs
+        # Convert from tanh to sigmoid
+        pred = pred / 2.0 + 0.5
+        label = label / 2.0 + 0.5
         # Remove Pneumonia/infection
         pred = pred[:, 0:5]
         label = label[:, 0:5]
@@ -122,7 +125,7 @@ class Model(ModelDesc):
 
     def build_graph(self, image, label):
         image = image / 128.0 - 1.0
-
+        label = label / 2.0 + 0.5
         if self.config.name == 'VGG16':
             logit = VGG16(image, classes=self.config.types)
         elif self.config.name == 'ShuffleNet':
@@ -136,7 +139,7 @@ class Model(ModelDesc):
         else:
             pass
 
-        estim = tf.sigmoid(logit, name='estim')
+        estim = tf.tanh(logit, name='estim')
         loss_xent = class_balanced_sigmoid_cross_entropy(logit, label, name='loss_xent')
 
         # Visualization
@@ -325,6 +328,7 @@ if __name__ == '__main__':
         ag_train = [
             # imgaug.Flip(horiz=True, vert=False, prob=0.5),
             imgaug.ColorSpace(mode=cv2.COLOR_GRAY2RGB),
+            imgaug.Albumentations(AB.CLAHE(p=1)),
             imgaug.RotationAndCropValid(max_deg=25),
             imgaug.GoogleNetRandomCropAndResize(crop_area_fraction=(0.8, 1.0),
                                                 aspect_ratio_range=(0.8, 1.2),
@@ -344,12 +348,11 @@ if __name__ == '__main__':
                                       [-0.5836, -0.6948, 0.4203]],
                                      dtype='float32')[::-1, ::-1]
                                  )]),
-            imgaug.Albumentations(AB.CLAHE(p=0.5)),
             imgaug.ColorSpace(mode=cv2.COLOR_RGB2GRAY),
             imgaug.ToFloat32(),
         ]
         ag_label = [ # Label smoothing
-            imgaug.BrightnessScale((0.5, 1.0), clip=False),
+            imgaug.BrightnessScale((0.9, 1.1), clip=False),
         ]
         ds_train.reset_state()
         ds_train = AugmentImageComponent(ds_train, ag_train, 0)
