@@ -99,6 +99,9 @@ def class_balanced_sigmoid_cross_entropy(logits, label, name='cross_entropy_loss
         class-balanced cross entropy loss.
     """
     with tf.name_scope('class_balanced_sigmoid_cross_entropy'):
+        logits = logits / 2.0 + 0.5
+        label = label / 2.0 + 0.5
+
         y = tf.cast(label, tf.float32)
 
         count_neg = tf.reduce_sum(1. - y)
@@ -388,7 +391,7 @@ if __name__ == '__main__':
                 ModelSaver(),
                 MinSaver('cost'),
                 ScheduledHyperParamSetter('learning_rate',
-                                          [(0, 1e-2), (50, 1e-3), (100, 1e-4), (150, 1e-5), (200, 1e-6)]),
+                                          [(0, 2e-3), (50, 1e-3), (100, 1e-4), (150, 1e-5), (200, 1e-6)]),
                 InferenceRunner(ds_valid, [CustomBinaryClassificationStats('estim', 'label'),
                                            ScalarStats('loss_xent'),
                                            ])
