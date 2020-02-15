@@ -92,7 +92,7 @@ class Vinmec(df.RNGDataFlow):
                     pass
                 # Try catch exception
                 label = np.nan_to_num(label, copy=True, nan=0)
-                label = np.array(label, dtype=np.uint8)
+                label = np.array(label, dtype=np.float32)
                 types = label.copy()
                 yield [image, types]
             elif self.is_train == 'test':
