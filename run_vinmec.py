@@ -163,7 +163,7 @@ class Model(ModelDesc):
         wd_cost = tf.multiply(wd_w, regularize_cost('.*/W', tf.nn.l2_loss), name='wd_cost')
 
         add_param_summary(('.*/W', ['histogram']))   # monitor W
-        cost = tf.add_n([loss_xent, 50*loss_mae, wd_cost], name='cost')
+        cost = tf.add_n([loss_xent, loss_mae, wd_cost], name='cost')
         add_moving_summary(loss_xent)
         add_moving_summary(loss_mae)
         add_moving_summary(wd_cost)
@@ -403,7 +403,7 @@ if __name__ == '__main__':
                 ScheduledHyperParamSetter('learning_rate',
                                           [(0, 2e-3), (50, 1e-3), (100, 1e-4), (150, 1e-5), (200, 1e-6)]),
                 InferenceRunner(ds_valid, [CustomBinaryClassificationStats('estim', 'label'),
-                                           ScalarStats('loss_xent'),
+                                           ScalarStats(['loss_xent', 'loss_mae', 'cost']),
                                            ])
             ],
             max_epoch=300,
