@@ -75,7 +75,7 @@ def densenet_backbone(image, num_blocks, classes=1000, growth_rate=32, bc_mode=F
     with argscope(Conv2D, nl=tf.identity, use_bias=False,
                   W_init=tf.contrib.layers.variance_scaling_initializer(mode='FAN_OUT')):
         print('backbone:', bc_mode, theta)
-        logits = (LinearWrap(image)
+        latent = (LinearWrap(image)
                   .Conv2D('conv0', 64, 7, stride=2, nl=BNReLU)
                   .MaxPooling('pool0', shape=3, stride=2, padding='SAME')
                   .apply(densenet_block, 'dense_group0', growth_rate, bc_mode, num_blocks[0])
@@ -86,9 +86,14 @@ def densenet_backbone(image, num_blocks, classes=1000, growth_rate=32, bc_mode=F
                   .apply(add_transition, 'trans_group2', bc_mode, theta)
                   .apply(densenet_block, 'dense_group3', growth_rate, bc_mode, num_blocks[3])
                   .BNReLU('bnlast')
-                  .GlobalAvgPooling('gap')
-                  .FullyConnected('linear', classes, nl=tf.identity)())
-    return logits
+                  # .GlobalAvgPooling('gap')
+                  #. .FullyConnected('linear', classes, nl=tf.identity)
+                  ())
+        logits =(LinearWrap(latent)
+                    .GlobalAvgPooling('gap')
+                    .FullyConnected('linear', classes, nl=tf.identity)
+                    ())
+    return logits, latent
 
 DENSENET_CONFIG = {
   121: [6, 12, 24, 16],

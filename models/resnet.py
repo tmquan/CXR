@@ -135,10 +135,11 @@ def resnet_backbone(image, num_blocks, group_func, block_func, classes=1000):
         l = group_func('group1', l, block_func, 128, num_blocks[1], 2)
         l = group_func('group2', l, block_func, 256, num_blocks[2], 2)
         l = group_func('group3', l, block_func, 512, num_blocks[3], 2)
+        latent = l
         l = GlobalAvgPooling('gap', l)
         logits = FullyConnected('linear', l, classes,
                                 kernel_initializer=tf.random_normal_initializer(stddev=0.01))
-    return logits
+    return logits, latent
 
 def ResNet101(image, num_blocks=[3, 4, 23, 3], mode='preact', classes=5):
     block_func = getattr(sys.modules[__name__], mode + '_bottleneck', None)

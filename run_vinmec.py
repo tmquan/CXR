@@ -124,23 +124,38 @@ class Model(ModelDesc):
         image = image / 128.0 - 1.0
 
         if self.config.name == 'VGG16':
-            logit = VGG16(image, classes=self.config.types)
+            logit, recon = VGG16(image, classes=self.config.types)
         elif self.config.name == 'ShuffleNet':
             logit = ShuffleNet(image, classes=self.config.types)
         elif self.config.name == 'ResNet101':
-            logit = ResNet101(image, mode=self.config.mode, classes=self.config.types)
+            logit, recon = ResNet101(image, mode=self.config.mode, classes=self.config.types)
         elif self.config.name == 'DenseNet121':
-            logit = DenseNet121(image, classes=self.config.types)
+            logit, recon = DenseNet121(image, classes=self.config.types)
+            recon = tf.transpose(recon, [0, 3, 1, 2])
         elif self.config.name == 'InceptionBN':
-            logit = InceptionBN(image, classes=self.config.types)
+            logit, recon = InceptionBN(image, classes=self.config.types)
         else:
             pass
 
         estim = tf.sigmoid(logit, name='estim')
         loss_xent = class_balanced_sigmoid_cross_entropy(logit, label, name='loss_xent')
 
+        # Reconstruction
+        with argscope([Conv2D, Conv2DTranspose], use_bias=False,
+                      kernel_initializer=tf.random_normal_initializer(stddev=0.02)), \
+                argscope([Conv2D, Conv2DTranspose, InstanceNorm], data_format='channels_first'):
+            recon = (LinearWrap(recon)
+                     .Conv2DTranspose('deconv0', 64 * 8, 3, strides=2)
+                     .Conv2DTranspose('deconv1', 64 * 8, 3, strides=2)
+                     .Conv2DTranspose('deconv2', 64 * 4, 3, strides=2)
+                     .Conv2DTranspose('deconv3', 64 * 2, 3, strides=2)
+                     .Conv2DTranspose('deconv4', 64 * 1, 3, strides=2)
+                     .tf.pad([[0, 0], [0, 0], [3, 3], [3, 3]], mode='SYMMETRIC')
+                     .Conv2D('recon', 1, 7, padding='VALID', activation=tf.tanh, use_bias=True)())
+            recon = tf.transpose(recon, [0, 2, 3, 1])
+        loss_mae = tf.reduce_mean(tf.abs(recon-image), name='loss_mae')
         # Visualization
-        visualize_tensors('image', [image], scale_func=lambda x: x * 128.0 + 128.0, 
+        visualize_tensors('image', [image, recon], scale_func=lambda x: x * 128.0 + 128.0, 
                           max_outputs=max(64, self.config.batch))
         # Regularize the weight of model 
         wd_w = tf.train.exponential_decay(2e-4, get_global_step_var(),
@@ -148,8 +163,9 @@ class Model(ModelDesc):
         wd_cost = tf.multiply(wd_w, regularize_cost('.*/W', tf.nn.l2_loss), name='wd_cost')
 
         add_param_summary(('.*/W', ['histogram']))   # monitor W
-        cost = tf.add_n([loss_xent, wd_cost], name='cost')
+        cost = tf.add_n([loss_xent, loss_mae, wd_cost], name='cost')
         add_moving_summary(loss_xent)
+        add_moving_summary(loss_mae)
         add_moving_summary(wd_cost)
         add_moving_summary(cost)
         return cost
