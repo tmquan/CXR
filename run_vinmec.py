@@ -163,7 +163,7 @@ class Model(ModelDesc):
         wd_cost = tf.multiply(wd_w, regularize_cost('.*/W', tf.nn.l2_loss), name='wd_cost')
 
         add_param_summary(('.*/W', ['histogram']))   # monitor W
-        cost = tf.add_n([loss_xent, loss_mae, wd_cost], name='cost')
+        cost = tf.add_n([loss_xent, 50*loss_mae, wd_cost], name='cost')
         add_moving_summary(loss_xent)
         add_moving_summary(loss_mae)
         add_moving_summary(wd_cost)
