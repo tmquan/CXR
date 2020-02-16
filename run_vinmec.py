@@ -348,12 +348,12 @@ if __name__ == '__main__':
             imgaug.ColorSpace(mode=cv2.COLOR_RGB2GRAY),
             imgaug.ToFloat32(),
         ]
-        # ag_label = [ # Label smoothing
-        #     imgaug.BrightnessScale((0.9, 1.1), clip=False),
-        # ]
+        ag_label = [ # Label smoothing
+            imgaug.BrightnessScale((0.8, 1.2), clip=False),
+        ]
         ds_train.reset_state()
         ds_train = AugmentImageComponent(ds_train, ag_train, 0)
-        # ds_train = AugmentImageComponent(ds_train, ag_label, 1)
+        ds_train = AugmentImageComponent(ds_train, ag_label, 1)
         ds_train = BatchData(ds_train, config.batch)
         ds_train = MultiProcessRunnerZMQ(ds_train, num_proc=2)
         ds_train = PrintData(ds_train)
