@@ -91,20 +91,30 @@ def densenet_backbone(image, num_blocks, classes=1000, growth_rate=32, bc_mode=F
                   ())
         logits =(LinearWrap(latent)
                     .GlobalAvgPooling('gap')
+                    .Dropout('dropout', 0.5)
                     .FullyConnected('linear', classes, nl=tf.identity)
                     ())
+        latent = tf.transpose(latent, [0, 3, 1, 2])
     return logits, latent
 
 DENSENET_CONFIG = {
   121: [6, 12, 24, 16],
   169: [6, 12, 32, 32],
   201: [6, 12, 48, 32],
-  264: [6, 12, 64, 48]
+  265: [6, 12, 64, 48]
 }
 
 def DenseNet121(image, classes=5):
 	return densenet_backbone(image, num_blocks=[6, 12, 24, 16], classes=classes, \
 							 growth_rate=32, bc_mode=False, theta=0.5)
+
+def DenseNet169(image, classes=5):
+    return densenet_backbone(image, num_blocks=[6, 12, 32, 32], classes=classes, \
+                             growth_rate=32, bc_mode=False, theta=0.5)
+
+def DenseNet201(image, classes=5):
+    return densenet_backbone(image, num_blocks=[6, 12, 48, 32], classes=classes, \
+                             growth_rate=32, bc_mode=False, theta=0.5)
     # def DenseNet(image, classes=5):
     #     depth = 40
     #     N = int((depth - 4)  / 3)

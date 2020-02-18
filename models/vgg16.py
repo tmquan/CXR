@@ -55,7 +55,7 @@ def VGG16(image, classes=5):
     with argscope(Conv2D, kernel_initializer=tf.variance_scaling_initializer(scale=2.)), \
         argscope([Conv2D, MaxPooling, BatchNorm], data_format='channels_first'):
         image_channel_first = tf.transpose(image, [0, 3, 1, 2])
-        output = (LinearWrap(image_channel_first)
+        latent = (LinearWrap(image_channel_first)
                   .apply(convnormrelu, 'conv1_1', 64)
                   .apply(convnormrelu, 'conv1_2', 64)
                   .MaxPooling('pool1', 2)
@@ -78,7 +78,9 @@ def VGG16(image, classes=5):
                   .apply(convnormrelu, 'conv5_2', 512)
                   .apply(convnormrelu, 'conv5_3', 512)
                   .MaxPooling('pool5', 2)
+                  ())
                   # 7
+        logits = (LinearWrap(latent)
                   .FullyConnected('fc6', 4096,
                                   kernel_initializer=tf.random_normal_initializer(stddev=0.001))
                   .tf.nn.relu(name='fc6_relu')
@@ -89,4 +91,4 @@ def VGG16(image, classes=5):
                   .Dropout('drop1', rate=0.5)
                   .FullyConnected('fc8', classes,
                                   kernel_initializer=tf.random_normal_initializer(stddev=0.01))())
-        return output
+        return logits, latent

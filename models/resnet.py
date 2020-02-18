@@ -3,7 +3,7 @@
 import sys
 import tensorflow as tf
 
-from tensorpack.models import BatchNorm, BNReLU, Conv2D, FullyConnected, GlobalAvgPooling, MaxPooling
+from tensorpack.models import Dropout, BatchNorm, BNReLU, Conv2D, FullyConnected, GlobalAvgPooling, MaxPooling
 from tensorpack.tfutils.argscope import argscope, get_arg_scope
 
 
@@ -137,6 +137,7 @@ def resnet_backbone(image, num_blocks, group_func, block_func, classes=1000):
         l = group_func('group3', l, block_func, 512, num_blocks[3], 2)
         latent = l
         l = GlobalAvgPooling('gap', l)
+        l = Dropout('dropout', l, 0.5)
         logits = FullyConnected('linear', l, classes,
                                 kernel_initializer=tf.random_normal_initializer(stddev=0.01))
     return logits, latent
