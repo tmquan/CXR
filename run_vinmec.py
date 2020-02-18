@@ -404,7 +404,7 @@ if __name__ == '__main__':
                 ModelSaver(),
                 MinSaver('cost'),
                 ScheduledHyperParamSetter('learning_rate',
-                                          [(0, 2e-4), (20, 1e-4), (40, 2e-5), (60, 1e-5), (80, 1e-6)]),
+                                          [(0, 1e-2), (20, 1e-3), (40, 1e-4), (60, 1e-5), (80, 1e-6)]),
                 InferenceRunner(ds_valid, [CustomBinaryClassificationStats('estim', 'label'),
                                            ScalarStats(['loss_xent', 'cost']),
                                            ])

@@ -84,8 +84,8 @@ class Vinmec(df.RNGDataFlow):
                 if self.types == 5:
                     label.append(self.df.iloc[idx]['Atelectasis'])
                     label.append(self.df.iloc[idx]['Cardiomegaly'])
-                    label.append(self.df.iloc[idx]['Enlarged Cardiomediastinum'])
-                    label.append(self.df.iloc[idx]['Lung Lesion'])
+                    label.append(self.df.iloc[idx]['Consolidation'])
+                    label.append(self.df.iloc[idx]['Edema'])
                     label.append(self.df.iloc[idx]['Pleural Effusion'])
                     # label.append(self.df.iloc[idx]['Pneumonia/infection'])
                 else:
