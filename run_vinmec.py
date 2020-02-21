@@ -21,9 +21,9 @@ import os
 os.environ['TF_DETERMINISTIC_OPS'] = '1'
 
 import tensorflow as tf
-# tf = tf.compat.v1
-tf.disable_v2_behavior()
-from tensorlayer.cost import dice_coe
+tf = tf.compat.v1
+# tf.disable_v2_behavior()
+# from tensorlayer.cost import dice_coe
 from vinmec import Vinmec
 from models.inceptionbn import InceptionBN
 from models.shufflenet import ShuffleNet
@@ -136,7 +136,7 @@ class Model(ModelDesc):
         elif self.config.name == 'DenseNet201':
             logit, recon = DenseNet201(image, classes=self.config.types)
         elif self.config.name == 'InceptionBN':
-            logit, recon = InceptionBN(image, classes=self.config.types)
+            logit = InceptionBN(image, classes=self.config.types)
         else:
             pass
 

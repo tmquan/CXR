@@ -1,5 +1,5 @@
 import tensorflow as tf
-
+tf = tf.compat.v1
 from tensorpack import *
 from tensorpack.dataflow import imgaug
 from tensorpack.tfutils import argscope, SmartInit, model_utils
