@@ -72,8 +72,8 @@ class CustomBinaryClassificationStats(Inferencer):
     def _on_fetches(self, outputs):
         pred, label = outputs
         # Remove Pneumonia/infection
-        pred = pred[:, 0:5]
-        label = label[:, 0:5]
+        pred = pred[:, 0:1]
+        label = label[:, 0:1]
         self.stat.feed((pred + 0.5).astype(np.int32), label)
 
     def _after_inference(self):
@@ -100,9 +100,9 @@ def class_balanced_sigmoid_cross_entropy(logits, label, name='cross_entropy_loss
 
         count_neg = tf.reduce_sum(1. - y)
         count_pos = tf.reduce_sum(y)
-        beta = count_neg / (count_neg + count_pos)
+        beta = count_neg / (count_neg + count_pos + 1e-6)
 
-        pos_weight = beta / (1 - beta)
+        pos_weight = beta / (1 - beta + 1e-6)
         cost = tf.nn.weighted_cross_entropy_with_logits(
             logits=logits, targets=y, pos_weight=pos_weight)
         cost = tf.reduce_mean(cost * (1 - beta))
@@ -244,6 +244,7 @@ if __name__ == '__main__':
     parser.add_argument('--mode', default='none', help='Additional mode of resnet')
     
     parser.add_argument('--types', type=int, default=5)
+    parser.add_argument('--pathology', default='Atelectasis')
     parser.add_argument('--batch', type=int, default=64)
     parser.add_argument('--shape', type=int, default=256)
 
@@ -267,6 +268,7 @@ if __name__ == '__main__':
                           is_train='valid',
                           fname='valid.csv',
                           types=config.types,
+                          pathology=config.pathology,
                           resize=int(config.shape))
 
         ag_valid = [
@@ -288,6 +290,7 @@ if __name__ == '__main__':
                           is_train='test',
                           fname='test.csv',
                           types=config.types,
+                          pathology=config.pathology,
                           resize=int(config.shape))
 
         ag_test3 = [
@@ -326,21 +329,23 @@ if __name__ == '__main__':
 
     else:
         logger.set_logger_dir(os.path.join(
-            config.save, config.name, config.mode, str(config.shape), str(config.types), ), 'd')
+            config.save, config.name, config.pathology, config.mode, str(config.shape), str(config.types), ), 'd')
 
         # Setup the dataset for training
         ds_train = Vinmec(folder=config.data,
                           is_train='train',
                           fname='train.csv',
                           types=config.types,
+                          pathology=config.pathology,
                           resize=int(config.shape))
-        # ds_other = Vinmec(folder='/u01/data/CXR/CheXpert-v1.0-small/',         
+        # ds_chexpert = Vinmec(folder='/u01/data/CXR/CheXpert-v1.0-small/',         
         #                   is_train='train',         #                  
-        #                   fname='valid_chexpert_vinmec_format.csv',    
-        #                   types=config.types,           
+        #                   fname='train_valid_chexpert_remove_uncertainty_vinmec_format.csv',    
+        #                   types=config.types,        
+        #                   pathology=config.pathology,   
         #                   resize=int(config.shape))     
 
-        # ds_train = ConcatData([ds_train, ds_other])
+        # ds_train = ConcatData([ds_chexpert, ds_vinmec])
         ag_train = [
             # imgaug.Flip(horiz=True, vert=False, prob=0.5),
             imgaug.ColorSpace(mode=cv2.COLOR_GRAY2RGB),
@@ -382,6 +387,7 @@ if __name__ == '__main__':
                           is_train='valid',
                           fname='valid.csv',
                           types=config.types,
+                          pathology=config.pathology,
                           resize=int(config.shape))
 
         ag_valid = [
@@ -412,6 +418,7 @@ if __name__ == '__main__':
             max_epoch=100,
             session_init=SmartInit(config.load),
         )
+
 
         trainer = SyncMultiGPUTrainerParameterServer(max(get_num_gpu(), 1))
 

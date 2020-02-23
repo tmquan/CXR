@@ -17,7 +17,7 @@ class Vinmec(df.RNGDataFlow):
     """ Produce images read from a list of files as (h, w, c) arrays. """
 
     def __init__(self, folder, types=14, is_train='train', channel=1,
-                 resize=None, debug=False, shuffle=False, fname='train.csv'):
+                 resize=None, debug=False, shuffle=False, pathology=None, fname='train.csv'):
         """[summary]
         [description
         Arguments:
@@ -52,7 +52,9 @@ class Vinmec(df.RNGDataFlow):
         print(self.folder)
         # Read the csv
         self.df = pd.read_csv(self.csvfile)
+        self.df.columns = self.df.columns.str.replace(' ', '_')
         print(self.df.info())
+        self.pathology = pathology
 
     def reset_state(self):
         self.rng = get_rng(self)
@@ -86,8 +88,11 @@ class Vinmec(df.RNGDataFlow):
                     label.append(self.df.iloc[idx]['Cardiomegaly'])
                     label.append(self.df.iloc[idx]['Consolidation'])
                     label.append(self.df.iloc[idx]['Edema'])
-                    label.append(self.df.iloc[idx]['Pleural Effusion'])
+                    label.append(self.df.iloc[idx]['Pleural_Effusion'])
                     # label.append(self.df.iloc[idx]['Pneumonia/infection'])
+                elif self.types == 1:
+                    assert self.pathology is not None
+                    label.append(self.df.iloc[idx][self.pathology])
                 else:
                     pass
                 # Try catch exception
