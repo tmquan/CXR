@@ -16,6 +16,7 @@ from tensorpack.utils.gpu import get_num_gpu
 from tensorpack.utils.stats import BinaryStatistics
 import albumentations as AB
 import argparse
+import sklearn.metrics 
 import sys
 import os
 os.environ['TF_DETERMINISTIC_OPS'] = '1'
@@ -47,6 +48,83 @@ def visualize_tensors(name, imgs, scale_func=lambda x: (x + 1.) * 128., max_outp
     tf.summary.image(name, xy, max_outputs=30)
 
 
+class CustomBinaryStatistics(object):
+    """
+    Statistics for binary decision,
+    including precision, recall, false positive, false negative
+    """
+
+    def __init__(self, threshold=0.5):
+        self.reset()
+        self.threshold = threshold
+
+    def reset(self):
+        # self.nr_pos = 0  # positive label
+        # self.nr_neg = 0  # negative label
+        # self.nr_pred_pos = 0
+        # self.nr_pred_neg = 0
+        # self.corr_pos = 0   # correct predict positive
+        # self.corr_neg = 0   # correct predict negative
+        self._f1_score = -1 
+        self._f2_score = -1 
+        self._auc = -1 
+        self._roc_auc = -1 
+        self._precision = -1 
+        self._recall = -1 
+
+        self.total_label = []
+        self.total_estim = []
+
+    def feed(self, estim, label):
+        """
+        Args:
+            estim (np.ndarray): binary array.
+            label (np.ndarray): binary array of the same size.
+        """
+        assert estim.shape == label.shape, "{} != {}".format(estim.shape, label.shape)
+        # self.nr_pos += (label == 1).sum()
+        # self.nr_neg += (label == 0).sum()
+        # self.nr_estim_pos += (estim == 1).sum()
+        # self.nr_estim_neg += (estim == 0).sum()
+        # self.corr_pos += ((estim == 1) & (estim == label)).sum()
+        # self.corr_neg += ((estim == 0) & (estim == label)).sum()
+        self.total_estim.append(estim)
+        self.total_label.append(label)
+
+    @property
+    def precision(self):
+        return sklearn.metrics.precision_score(np.array(self.total_label), 
+                                               np.array(self.total_estim) >= self.threshold, 
+                                               )
+    @property
+    def recall(self):
+        return sklearn.metrics.recall_score(np.array(self.total_label), 
+                                      np.array(self.total_estim) >= self.threshold, 
+                                      )
+    @property
+    def auc(self):
+        return sklearn.metrics.auc(np.array(self.total_label), 
+                                   np.array(self.total_estim) >= self.threshold, 
+                                   )
+
+    @property
+    def roc_auc(self):
+        return sklearn.metrics.roc_auc_score(np.array(self.total_label), 
+                                             np.array(self.total_estim) >= self.threshold, 
+                                             )
+    @property
+    def f1_score(self):
+        return sklearn.metrics.f1_score(np.array(self.total_label), 
+                                        np.array(self.total_estim) >= self.threshold, 
+                                        )
+
+    @property
+    def f2_score(self):
+        return sklearn.metrics.fbeta_score(np.array(self.total_label), 
+                                           np.array(self.total_estim) >= self.threshold, 
+                                           fbeta = 2,
+                                           )
+
 class CustomBinaryClassificationStats(Inferencer):
     """
     Compute precision / recall in binary classification, given the
@@ -64,23 +142,22 @@ class CustomBinaryClassificationStats(Inferencer):
         self.prefix = prefix
 
     def _before_inference(self):
-        self.stat = BinaryStatistics()
+        self.stat = CustomBinaryStatistics(threshold=0.5)
 
     def _get_fetches(self):
         return [self.pred_tensor_name, self.label_tensor_name]
 
     def _on_fetches(self, outputs):
         pred, label = outputs
-        # Remove Pneumonia/infection
-        pred = pred[:, 0:1]
-        label = label[:, 0:1]
-        self.stat.feed((pred + 0.5).astype(np.int32), label)
+        self.stat.feed((pred).astype(np.int32), label)
 
     def _after_inference(self):
         return {self.prefix + '_precision': self.stat.precision,
                 self.prefix + '_recall': self.stat.recall,
-                self.prefix + '_f1_score': 2 * (self.stat.precision * self.stat.recall) / (1 * self.stat.precision + self.stat.recall),
-                self.prefix + '_f2_score': 5 * (self.stat.precision * self.stat.recall) / (4 * self.stat.precision + self.stat.recall),
+                self.prefix + '_f1_score': self.stat.f1_score,
+                self.prefix + '_f2_score': self.stat.f2_score,
+                self.prefix + '_auc': self.stat.auc,
+                self.prefix + '_roc_auc': self.stat.roc_auc,
                 }
 
 
@@ -243,8 +320,8 @@ if __name__ == '__main__':
     parser.add_argument('--save', default='train_log/', help='Saving directory')
     parser.add_argument('--mode', default='none', help='Additional mode of resnet')
     
-    parser.add_argument('--types', type=int, default=5)
-    parser.add_argument('--pathology', default='Atelectasis')
+    parser.add_argument('--types', type=int, default=16)
+    parser.add_argument('--pathology', default='All')
     parser.add_argument('--batch', type=int, default=64)
     parser.add_argument('--shape', type=int, default=256)
 
@@ -377,9 +454,9 @@ if __name__ == '__main__':
         ]
         ds_train.reset_state()
         ds_train = AugmentImageComponent(ds_train, ag_train, 0)
-        ds_train = AugmentImageComponent(ds_train, ag_label, 1)
+        # ds_train = AugmentImageComponent(ds_train, ag_label, 1)
         ds_train = BatchData(ds_train, config.batch)
-        ds_train = MultiProcessRunnerZMQ(ds_train, num_proc=2)
+        ds_train = MultiProcessRunnerZMQ(ds_train, num_proc=4)
         ds_train = PrintData(ds_train)
 
         # Setup the dataset for validating
