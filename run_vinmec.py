@@ -54,9 +54,10 @@ class CustomBinaryStatistics(object):
     including precision, recall, false positive, false negative
     """
 
-    def __init__(self, threshold=0.5):
+    def __init__(self, threshold=0.5, types=6):
         self.reset()
         self.threshold = threshold
+        self.types = types
 
     def reset(self):
         # self.nr_pos = 0  # positive label
@@ -67,7 +68,7 @@ class CustomBinaryStatistics(object):
         # self.corr_neg = 0   # correct predict negative
         self._f1_score = -1 
         self._f2_score = -1 
-        self._auc = -1 
+        # self._auc = -1 
         self._roc_auc = -1 
         self._precision = -1 
         self._recall = -1 
@@ -93,37 +94,40 @@ class CustomBinaryStatistics(object):
 
     @property
     def precision(self):
-        return sklearn.metrics.precision_score(np.array(self.total_label), 
-                                               np.array(self.total_estim) >= self.threshold, 
-                                               )
+        np_label = np.array(self.total_label).astype(np.float32).reshape(-1, self.types)
+        np_estim = 1.0*(np.array(self.total_estim) >= self.threshold).astype(np.float32).reshape(-1, self.types)
+        # print(np_label.shape, np_estim.shape, np_label.dtype, np_estim.dtype)
+        return sklearn.metrics.precision_score(np_label, np_estim, average='weighted')
+
     @property
     def recall(self):
-        return sklearn.metrics.recall_score(np.array(self.total_label), 
-                                      np.array(self.total_estim) >= self.threshold, 
-                                      )
-    @property
-    def auc(self):
-        return sklearn.metrics.auc(np.array(self.total_label), 
-                                   np.array(self.total_estim) >= self.threshold, 
-                                   )
+        np_label = np.array(self.total_label).astype(np.float32).reshape(-1, self.types)
+        np_estim = 1.0*(np.array(self.total_estim) >= self.threshold).astype(np.float32).reshape(-1, self.types)
+        return sklearn.metrics.recall_score(np_label, np_estim, average='weighted')
+
+    # @property
+    # def auc(self):
+    #     np_label = np.array(self.total_label).astype(np.float32).reshape(-1, self.types)
+    #     np_estim = 1.0*(np.array(self.total_estim) >= self.threshold).astype(np.float32).reshape(-1, self.types)
+    #     return sklearn.metrics.auc(np_label, np_estim)
 
     @property
     def roc_auc(self):
-        return sklearn.metrics.roc_auc_score(np.array(self.total_label), 
-                                             np.array(self.total_estim) >= self.threshold, 
-                                             )
+        np_label = np.array(self.total_label).astype(np.float32).reshape(-1, self.types)
+        np_estim = 1.0*(np.array(self.total_estim) >= self.threshold).astype(np.float32).reshape(-1, self.types)
+        return sklearn.metrics.roc_auc_score(np_label, np_estim, average='weighted')
+
     @property
     def f1_score(self):
-        return sklearn.metrics.f1_score(np.array(self.total_label), 
-                                        np.array(self.total_estim) >= self.threshold, 
-                                        )
+        np_label = np.array(self.total_label).astype(np.float32).reshape(-1, self.types)
+        np_estim = 1.0*(np.array(self.total_estim) >= self.threshold).astype(np.float32).reshape(-1, self.types)
+        return sklearn.metrics.f1_score(np_label, np_estim, average='weighted')
 
     @property
     def f2_score(self):
-        return sklearn.metrics.fbeta_score(np.array(self.total_label), 
-                                           np.array(self.total_estim) >= self.threshold, 
-                                           fbeta = 2,
-                                           )
+        np_label = np.array(self.total_label).astype(np.float32).reshape(-1, self.types)
+        np_estim = 1.0*(np.array(self.total_estim) >= self.threshold).astype(np.float32).reshape(-1, self.types)
+        return sklearn.metrics.fbeta_score(np_label, np_estim, beta=2, average='weighted')
 
 class CustomBinaryClassificationStats(Inferencer):
     """
@@ -131,7 +135,7 @@ class CustomBinaryClassificationStats(Inferencer):
     prediction vector and the label vector.
     """
 
-    def __init__(self, pred_tensor_name, label_tensor_name, prefix='validation'):
+    def __init__(self, pred_tensor_name, label_tensor_name, args=None, prefix='valid'):
         """
         Args:
             pred_tensor_name(str): name of the 0/1 prediction tensor.
@@ -140,9 +144,10 @@ class CustomBinaryClassificationStats(Inferencer):
         self.pred_tensor_name = pred_tensor_name
         self.label_tensor_name = label_tensor_name
         self.prefix = prefix
+        self.args = args
 
     def _before_inference(self):
-        self.stat = CustomBinaryStatistics(threshold=0.5)
+        self.stat = CustomBinaryStatistics(threshold=args.threshold, types=args.types)
 
     def _get_fetches(self):
         return [self.pred_tensor_name, self.label_tensor_name]
@@ -156,7 +161,7 @@ class CustomBinaryClassificationStats(Inferencer):
                 self.prefix + '_recall': self.stat.recall,
                 self.prefix + '_f1_score': self.stat.f1_score,
                 self.prefix + '_f2_score': self.stat.f2_score,
-                self.prefix + '_auc': self.stat.auc,
+                # self.prefix + '_auc': self.stat.auc,
                 self.prefix + '_roc_auc': self.stat.roc_auc,
                 }
 
@@ -188,32 +193,32 @@ def class_balanced_sigmoid_cross_entropy(logits, label, name='cross_entropy_loss
 
 
 class Model(ModelDesc):
-    def __init__(self, config):
+    def __init__(self, args):
         super(Model, self).__init__()
-        self.config = config
+        self.args = args
 
     def inputs(self):
-        return [tf.TensorSpec([None, self.config.shape, self.config.shape, 1], tf.float32, 'image'),
-                tf.TensorSpec([None, self.config.types], tf.float32, 'label')
+        return [tf.TensorSpec([None, self.args.shape, self.args.shape, 1], tf.float32, 'image'),
+                tf.TensorSpec([None, self.args.types], tf.float32, 'label')
                 ]
 
     def build_graph(self, image, label):
         image = image / 128.0 - 1.0
 
-        if self.config.name == 'VGG16':
-            logit, recon = VGG16(image, classes=self.config.types)
-        elif self.config.name == 'ShuffleNet':
-            logit = ShuffleNet(image, classes=self.config.types)
-        elif self.config.name == 'ResNet101':
-            logit, recon = ResNet101(image, mode=self.config.mode, classes=self.config.types)
-        elif self.config.name == 'DenseNet121':
-            logit, recon = DenseNet121(image, classes=self.config.types) 
-        elif self.config.name == 'DenseNet169':
-            logit, recon = DenseNet169(image, classes=self.config.types)
-        elif self.config.name == 'DenseNet201':
-            logit, recon = DenseNet201(image, classes=self.config.types)
-        elif self.config.name == 'InceptionBN':
-            logit = InceptionBN(image, classes=self.config.types)
+        if self.args.name == 'VGG16':
+            logit, recon = VGG16(image, classes=self.args.types)
+        elif self.args.name == 'ShuffleNet':
+            logit = ShuffleNet(image, classes=self.args.types)
+        elif self.args.name == 'ResNet101':
+            logit, recon = ResNet101(image, mode=self.args.mode, classes=self.args.types)
+        elif self.args.name == 'DenseNet121':
+            logit, recon = DenseNet121(image, classes=self.args.types) 
+        elif self.args.name == 'DenseNet169':
+            logit, recon = DenseNet169(image, classes=self.args.types)
+        elif self.args.name == 'DenseNet201':
+            logit, recon = DenseNet201(image, classes=self.args.types)
+        elif self.args.name == 'InceptionBN':
+            logit = InceptionBN(image, classes=self.args.types)
         else:
             pass
 
@@ -237,7 +242,7 @@ class Model(ModelDesc):
         # loss_mae = tf.reduce_mean(tf.abs(recon-image), name='loss_mae')
         # Visualization
         visualize_tensors('image', [image], scale_func=lambda x: x * 128.0 + 128.0, 
-                          max_outputs=max(64, self.config.batch))
+                          max_outputs=max(64, self.args.batch))
         # Regularize the weight of model 
         wd_w = tf.train.exponential_decay(2e-4, get_global_step_var(),
                                           80000, 0.7, True)
@@ -321,32 +326,33 @@ if __name__ == '__main__':
     parser.add_argument('--mode', default='none', help='Additional mode of resnet')
     
     parser.add_argument('--types', type=int, default=16)
+    parser.add_argument('--threshold', type=float, default=0.5)
     parser.add_argument('--pathology', default='All')
     parser.add_argument('--batch', type=int, default=64)
     parser.add_argument('--shape', type=int, default=256)
 
-    config = parser.parse_args()
+    args = parser.parse_args()
 
-    if config.seed:
-        os.environ['PYTHONHASHSEED']=str(config.seed)
-        random.seed(config.seed)
-        np.random.seed(config.seed)
-        fix_rng_seed(config.seed)
-        tf.random.set_random_seed(config.seed)
+    if args.seed:
+        os.environ['PYTHONHASHSEED']=str(args.seed)
+        random.seed(args.seed)
+        np.random.seed(args.seed)
+        fix_rng_seed(args.seed)
+        tf.random.set_random_seed(args.seed)
 
-    if config.gpus:
+    if args.gpus:
         # os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
-        os.environ['CUDA_VISIBLE_DEVICES'] = config.gpus
+        os.environ['CUDA_VISIBLE_DEVICES'] = args.gpus
 
-    model = Model(config=config)
+    model = Model(args=args)
 
-    if config.eval:
-        ds_valid = Vinmec(folder=config.data,
+    if args.eval:
+        ds_valid = Vinmec(folder=args.data,
                           is_train='valid',
                           fname='valid.csv',
-                          types=config.types,
-                          pathology=config.pathology,
-                          resize=int(config.shape))
+                          types=args.types,
+                          pathology=args.pathology,
+                          resize=int(args.shape))
 
         ag_valid = [
             imgaug.ColorSpace(mode=cv2.COLOR_GRAY2RGB),
@@ -359,16 +365,16 @@ if __name__ == '__main__':
         ds_valid = BatchData(ds_valid, 1)
         ds_valid = PrintData(ds_valid)
 
-        eval(model, SmartInit(config.load), ds_valid)
+        eval(model, SmartInit(args.load), ds_valid)
         sys.exit(0)
 
-    elif config.pred:
-        ds_test3 = Vinmec(folder=config.data,
+    elif args.pred:
+        ds_test3 = Vinmec(folder=args.data,
                           is_train='test',
                           fname='test.csv',
-                          types=config.types,
-                          pathology=config.pathology,
-                          resize=int(config.shape))
+                          types=args.types,
+                          pathology=args.pathology,
+                          resize=int(args.shape))
 
         ag_test3 = [
             imgaug.ColorSpace(mode=cv2.COLOR_GRAY2RGB),
@@ -381,11 +387,11 @@ if __name__ == '__main__':
         ds_test3 = BatchData(ds_test3, 1)
         ds_test3 = PrintData(ds_test3)
 
-        estims = pred(model, SmartInit(config.load), ds_test3)
+        estims = pred(model, SmartInit(args.load), ds_test3)
 
         # Read and write new csv
         fname = 'test.csv'
-        csv_file = os.path.join(config.data, fname)
+        csv_file = os.path.join(args.data, fname)
         df = pd.read_csv(csv_file)
         print(df)
         df = df['Images']
@@ -406,21 +412,21 @@ if __name__ == '__main__':
 
     else:
         logger.set_logger_dir(os.path.join(
-            config.save, config.name, config.pathology, config.mode, str(config.shape), str(config.types), ), 'd')
+            args.save, args.name, args.pathology, args.mode, str(args.shape), str(args.types), ), 'd')
 
         # Setup the dataset for training
-        ds_train = Vinmec(folder=config.data,
+        ds_train = Vinmec(folder=args.data,
                           is_train='train',
                           fname='train.csv',
-                          types=config.types,
-                          pathology=config.pathology,
-                          resize=int(config.shape))
+                          types=args.types,
+                          pathology=args.pathology,
+                          resize=int(args.shape))
         # ds_chexpert = Vinmec(folder='/u01/data/CXR/CheXpert-v1.0-small/',         
         #                   is_train='train',         #                  
         #                   fname='train_valid_chexpert_remove_uncertainty_vinmec_format.csv',    
-        #                   types=config.types,        
-        #                   pathology=config.pathology,   
-        #                   resize=int(config.shape))     
+        #                   types=args.types,        
+        #                   pathology=args.pathology,   
+        #                   resize=int(args.shape))     
 
         # ds_train = ConcatData([ds_chexpert, ds_vinmec])
         ag_train = [
@@ -429,7 +435,7 @@ if __name__ == '__main__':
             imgaug.RotationAndCropValid(max_deg=25),
             imgaug.GoogleNetRandomCropAndResize(crop_area_fraction=(0.8, 1.0),
                                                 aspect_ratio_range=(0.8, 1.2),
-                                                interp=cv2.INTER_LINEAR, target_shape=config.shape),
+                                                interp=cv2.INTER_LINEAR, target_shape=args.shape),
             imgaug.RandomOrderAug(
                 [imgaug.BrightnessScale((0.6, 1.4), clip=False),
                  imgaug.Contrast((0.6, 1.4), clip=False),
@@ -453,19 +459,20 @@ if __name__ == '__main__':
             imgaug.BrightnessScale((0.8, 1.2), clip=False),
         ]
         ds_train.reset_state()
+        # ds_train = FixedSizeData(ds_train, 128)
         ds_train = AugmentImageComponent(ds_train, ag_train, 0)
         # ds_train = AugmentImageComponent(ds_train, ag_label, 1)
-        ds_train = BatchData(ds_train, config.batch)
+        ds_train = BatchData(ds_train, args.batch)
         ds_train = MultiProcessRunnerZMQ(ds_train, num_proc=4)
         ds_train = PrintData(ds_train)
 
         # Setup the dataset for validating
-        ds_valid = Vinmec(folder=config.data,
+        ds_valid = Vinmec(folder=args.data,
                           is_train='valid',
                           fname='valid.csv',
-                          types=config.types,
-                          pathology=config.pathology,
-                          resize=int(config.shape))
+                          types=args.types,
+                          pathology=args.pathology,
+                          resize=int(args.shape))
 
         ag_valid = [
             imgaug.ColorSpace(mode=cv2.COLOR_GRAY2RGB),
@@ -474,8 +481,9 @@ if __name__ == '__main__':
             imgaug.ToFloat32(),
         ]
         ds_valid.reset_state()
+        # ds_valid = FixedSizeData(ds_valid, 128)
         ds_valid = AugmentImageComponent(ds_valid, ag_valid, 0)
-        ds_valid = BatchData(ds_valid, config.batch)
+        ds_valid = BatchData(ds_valid, args.batch)
         # ds_valid = MultiProcessRunnerZMQ(ds_valid, num_proc=1)
         ds_valid = PrintData(ds_valid)
 
@@ -488,12 +496,12 @@ if __name__ == '__main__':
                 MinSaver('cost'),
                 ScheduledHyperParamSetter('learning_rate',
                                           [(0, 1e-2), (20, 1e-3), (40, 1e-4), (60, 1e-5), (80, 1e-6)]),
-                InferenceRunner(ds_valid, [CustomBinaryClassificationStats('estim', 'label'),
+                InferenceRunner(ds_valid, [CustomBinaryClassificationStats('estim', 'label', args),
                                            ScalarStats(['loss_xent', 'cost']),
                                            ])
             ],
             max_epoch=100,
-            session_init=SmartInit(config.load),
+            session_init=SmartInit(args.load),
         )
 
 
