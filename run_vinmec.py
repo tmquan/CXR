@@ -89,44 +89,45 @@ class CustomBinaryStatistics(object):
         # self.nr_estim_neg += (estim == 0).sum()
         # self.corr_pos += ((estim == 1) & (estim == label)).sum()
         # self.corr_neg += ((estim == 0) & (estim == label)).sum()
-        self.total_estim.append(estim)
+        # print(estim, label)
+        self.total_estim.append(estim >= self.threshold)
         self.total_label.append(label)
 
     @property
     def precision(self):
         np_label = np.array(self.total_label).astype(np.float32).reshape(-1, self.types)
-        np_estim = 1.0*(np.array(self.total_estim) >= self.threshold).astype(np.float32).reshape(-1, self.types)
+        np_estim = np.array(self.total_estim).astype(np.float32).reshape(-1, self.types)
         # print(np_label.shape, np_estim.shape, np_label.dtype, np_estim.dtype)
         return sklearn.metrics.precision_score(np_label, np_estim, average='weighted')
 
     @property
     def recall(self):
         np_label = np.array(self.total_label).astype(np.float32).reshape(-1, self.types)
-        np_estim = 1.0*(np.array(self.total_estim) >= self.threshold).astype(np.float32).reshape(-1, self.types)
+        np_estim = np.array(self.total_estim).astype(np.float32).reshape(-1, self.types)
         return sklearn.metrics.recall_score(np_label, np_estim, average='weighted')
 
     # @property
     # def auc(self):
     #     np_label = np.array(self.total_label).astype(np.float32).reshape(-1, self.types)
-    #     np_estim = 1.0*(np.array(self.total_estim) >= self.threshold).astype(np.float32).reshape(-1, self.types)
+    #     np_estim = np.array(self.total_estim).astype(np.float32).reshape(-1, self.types)
     #     return sklearn.metrics.auc(np_label, np_estim)
 
     @property
     def roc_auc(self):
         np_label = np.array(self.total_label).astype(np.float32).reshape(-1, self.types)
-        np_estim = 1.0*(np.array(self.total_estim) >= self.threshold).astype(np.float32).reshape(-1, self.types)
+        np_estim = np.array(self.total_estim).astype(np.float32).reshape(-1, self.types)
         return sklearn.metrics.roc_auc_score(np_label, np_estim, average='weighted')
 
     @property
     def f1_score(self):
         np_label = np.array(self.total_label).astype(np.float32).reshape(-1, self.types)
-        np_estim = 1.0*(np.array(self.total_estim) >= self.threshold).astype(np.float32).reshape(-1, self.types)
+        np_estim = np.array(self.total_estim).astype(np.float32).reshape(-1, self.types)
         return sklearn.metrics.f1_score(np_label, np_estim, average='weighted')
 
     @property
     def f2_score(self):
         np_label = np.array(self.total_label).astype(np.float32).reshape(-1, self.types)
-        np_estim = 1.0*(np.array(self.total_estim) >= self.threshold).astype(np.float32).reshape(-1, self.types)
+        np_estim = np.array(self.total_estim).astype(np.float32).reshape(-1, self.types)
         return sklearn.metrics.fbeta_score(np_label, np_estim, beta=2, average='weighted')
 
 class CustomBinaryClassificationStats(Inferencer):
@@ -153,8 +154,8 @@ class CustomBinaryClassificationStats(Inferencer):
         return [self.pred_tensor_name, self.label_tensor_name]
 
     def _on_fetches(self, outputs):
-        pred, label = outputs
-        self.stat.feed((pred).astype(np.int32), label)
+        estim, label = outputs
+        self.stat.feed(estim, label)
 
     def _after_inference(self):
         return {self.prefix + '_precision': self.stat.precision,
