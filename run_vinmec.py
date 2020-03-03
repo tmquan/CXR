@@ -322,7 +322,7 @@ if __name__ == '__main__':
     parser.add_argument('--eval', action='store_true', help='run evaluation')
     parser.add_argument('--pred', action='store_true', help='run prediction')
     parser.add_argument('--load', help='load model')
-    parser.add_argument('--data', default='/u01/data/Vimmec_Data_small/', help='Data directory')
+    parser.add_argument('--data', default='/u01/data/Vimmec_Data_small', help='Data directory')
     parser.add_argument('--save', default='train_log/', help='Saving directory')
     parser.add_argument('--mode', default='none', help='Additional mode of resnet')
     
@@ -418,7 +418,7 @@ if __name__ == '__main__':
         # Setup the dataset for training
         ds_train = Vinmec(folder=args.data,
                           is_train='train',
-                          fname='train.csv',
+                          fname='train_v2.csv',
                           types=args.types,
                           pathology=args.pathology,
                           resize=int(args.shape))
@@ -464,13 +464,13 @@ if __name__ == '__main__':
         ds_train = AugmentImageComponent(ds_train, ag_train, 0)
         # ds_train = AugmentImageComponent(ds_train, ag_label, 1)
         ds_train = BatchData(ds_train, args.batch)
-        ds_train = MultiProcessRunnerZMQ(ds_train, num_proc=4)
+        ds_train = MultiProcessRunnerZMQ(ds_train, num_proc=2)
         ds_train = PrintData(ds_train)
 
         # Setup the dataset for validating
         ds_valid = Vinmec(folder=args.data,
                           is_train='valid',
-                          fname='valid.csv',
+                          fname='valid_v2.csv',
                           types=args.types,
                           pathology=args.pathology,
                           resize=int(args.shape))
@@ -488,6 +488,25 @@ if __name__ == '__main__':
         # ds_valid = MultiProcessRunnerZMQ(ds_valid, num_proc=1)
         ds_valid = PrintData(ds_valid)
 
+        # Setup the dataset for validating
+        ds_test2 = Vinmec(folder=args.data,
+                          is_train='valid',
+                          fname='test_v2.csv',
+                          types=args.types,
+                          pathology=args.pathology,
+                          resize=int(args.shape))
+
+        ag_test2 = [
+            imgaug.ColorSpace(mode=cv2.COLOR_GRAY2RGB),
+            imgaug.Albumentations(AB.CLAHE(p=1)),
+            imgaug.ColorSpace(mode=cv2.COLOR_RGB2GRAY),
+            imgaug.ToFloat32(),
+        ]
+        ds_test2.reset_state()
+        ds_test2 = AugmentImageComponent(ds_test2, ag_test2, 0)
+        ds_test2 = BatchData(ds_test2, args.batch)
+        ds_test2 = PrintData(ds_test2)
+
         # Setup the config
         config = TrainConfig(
             model=model,
@@ -496,12 +515,15 @@ if __name__ == '__main__':
                 ModelSaver(),
                 MinSaver('cost'),
                 ScheduledHyperParamSetter('learning_rate',
-                                          [(0, 1e-2), (20, 1e-3), (40, 1e-4), (60, 1e-5), (80, 1e-6)]),
-                InferenceRunner(ds_valid, [CustomBinaryClassificationStats('estim', 'label', args),
-                                           ScalarStats(['loss_xent', 'cost']),
-                                           ])
+                                          [(0, 1e-2), (50, 1e-3), (100, 1e-4), (150, 1e-5), (200, 1e-6)]),
+                InferenceRunner(ds_valid, [CustomBinaryClassificationStats('estim', 'label', args, prefix='valid'),
+                                           ScalarStats(['loss_xent', 'cost'], prefix='valid'),
+                                           ], tower_name='ValidTower'),
+                InferenceRunner(ds_test2, [CustomBinaryClassificationStats('estim', 'label', args, prefix='test2'),
+                                           ScalarStats(['loss_xent', 'cost'], prefix='test2'),
+                                           ], tower_name='Test2Tower'),
             ],
-            max_epoch=100,
+            max_epoch=250,
             session_init=SmartInit(args.load),
         )
 

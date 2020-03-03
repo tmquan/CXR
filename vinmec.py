@@ -68,7 +68,7 @@ class Vinmec(df.RNGDataFlow):
             self.rng.shuffle(indices)
 
         for idx in indices:
-            fpath = os.path.join(os.path.dirname(self.folder), 'data')
+            fpath = os.path.join(self.folder, 'data') #(os.path.dirname(self.folder), 'data')
             fname = os.path.join(fpath, self.df.iloc[idx]['Images'])
             image = cv2.imread(fname, self.imread_mode)
             assert image is not None, fname
