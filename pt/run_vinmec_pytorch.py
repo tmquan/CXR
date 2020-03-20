@@ -8,6 +8,7 @@ from collections import OrderedDict
 
 import torch
 import torch.backends.cudnn as cudnn
+import torch.nn as nn
 import torch.nn.functional as F
 import torch.nn.parallel
 import torch.optim as optim
@@ -20,7 +21,18 @@ import torchvision.transforms as transforms
 
 import pytorch_lightning as pl
 from pytorch_lightning.core import LightningModule
+from pytorch_lightning.callbacks import ModelCheckpoint
 
+import tensorpack.dataflow
+from tensorpack.dataflow import imgaug
+from tensorpack.dataflow import AugmentImageComponent
+from tensorpack.dataflow import BatchData, MultiProcessRunner, PrintData, MapData, FixedSizeData
+
+import albumentations as AB
+import cv2 
+import numpy as np
+
+from vinmec import Vinmec
 # pull out resnet names from torchvision models
 MODEL_NAMES = sorted(
     name for name in models.__dict__
@@ -35,91 +47,82 @@ class ImageNetLightningModel(LightningModule):
         """
         super(ImageNetLightningModel, self).__init__()
         self.hparams = hparams
-        self.model = models.__dict__[self.hparams.arch](pretrained=self.hparams.pretrained)
+        if self.hparams.arch=='densenet121':
+            self.model = getattr(models, self.hparams.arch)(pretrained=self.hparams.pretrained)
+            # self.model.features.conv0 = nn.Conv2d(1, 64, kernel_size=(7, 7), 
+            #     stride=(2, 2), padding=(3, 3), bias=False)
+            self.model.classifier = nn.Sequential(
+                nn.Dropout(0.5),
+                nn.Linear(1024, self.hparams.types) # 5 diseases
+            )
+        else:
+            ValueError
+        self.criterion = torch.nn.BCEWithLogitsLoss(weight=None, size_average=True)
+        self.val_output = np.array([])
+        self.val_target = np.array([])  
+        self.test_output = np.array([])
+        self.test_target = np.array([])
 
     def forward(self, x):
         return self.model(x)
 
-    def training_step(self, batch, batch_idx):
+    def training_step(self, batch, batch_idx, prefix=''):
         images, target = batch
         output = self.forward(images)
-        loss_val = F.cross_entropy(output, target)
-        acc1, acc5 = self.__accuracy(output, target, topk=(1, 5))
-
+        loss = self.criterion(output, target)
         # in DP mode (default) make sure if result is scalar, there's another dim in the beginning
         if self.trainer.use_dp or self.trainer.use_ddp2:
-            loss_val = loss_val.unsqueeze(0)
-            acc1 = acc1.unsqueeze(0)
-            acc5 = acc5.unsqueeze(0)
-
-        tqdm_dict = {'train_loss': loss_val}
-        output = OrderedDict({
-            'loss': loss_val,
-            'acc1': acc1,
-            'acc5': acc5,
+            loss = loss.unsqueeze(0)
+        
+        tqdm_dict = {'train_loss': loss}
+        result = OrderedDict({
+            'loss': loss,
             'progress_bar': tqdm_dict,
             'log': tqdm_dict
         })
+        return result
 
-        return output
 
-    def validation_step(self, batch, batch_idx):
+    def validation_step(self, batch, batch_idx, prefix='val_'):
         images, target = batch
         output = self.forward(images)
-        loss_val = F.cross_entropy(output, target)
-        acc1, acc5 = self.__accuracy(output, target, topk=(1, 5))
+        loss = self.criterion(output, target)
 
         # in DP mode (default) make sure if result is scalar, there's another dim in the beginning
         if self.trainer.use_dp or self.trainer.use_ddp2:
-            loss_val = loss_val.unsqueeze(0)
-            acc1 = acc1.unsqueeze(0)
-            acc5 = acc5.unsqueeze(0)
+            loss = loss.unsqueeze(0)
 
-        output = OrderedDict({
-            'val_loss': loss_val,
-            'val_acc1': acc1,
-            'val_acc5': acc5,
+        result = OrderedDict({
+            'val_loss': loss,
         })
-
-        return output
-
-    def validation_epoch_end(self, outputs):
-
-        tqdm_dict = {}
-
-        for metric_name in ["val_loss", "val_acc1", "val_acc5"]:
-            metric_total = 0
-
-            for output in outputs:
-                metric_value = output[metric_name]
-
-                # reduce manually when using dp
-                if self.trainer.use_dp or self.trainer.use_ddp2:
-                    metric_value = torch.mean(metric_value)
-
-                metric_total += metric_value
-
-            tqdm_dict[metric_name] = metric_total / len(outputs)
-
-        result = {'progress_bar': tqdm_dict, 'log': tqdm_dict, 'val_loss': tqdm_dict["val_loss"]}
         return result
 
-    @classmethod
-    def __accuracy(cls, output, target, topk=(1,)):
-        """Computes the accuracy over the k top predictions for the specified values of k"""
-        with torch.no_grad():
-            maxk = max(topk)
-            batch_size = target.size(0)
+    def test_step(self, batch, batch_idx, prefix='test_'):
+        images, target = batch
+        output = self.forward(images)
+        loss = self.criterion(output, target)
 
-            _, pred = output.topk(maxk, 1, True, True)
-            pred = pred.t()
-            correct = pred.eq(target.view(1, -1).expand_as(pred))
+        # in DP mode (default) make sure if result is scalar, there's another dim in the beginning
+        if self.trainer.use_dp or self.trainer.use_ddp2:
+            loss = loss.unsqueeze(0)
 
-            res = []
-            for k in topk:
-                correct_k = correct[:k].view(-1).float().sum(0, keepdim=True)
-                res.append(correct_k.mul_(100.0 / batch_size))
-            return res
+        result = OrderedDict({
+            'test_loss': loss,
+        })
+        return result
+
+    def validation_epoch_end(self, outputs, prefix='val_'):
+        val_loss_mean = torch.stack([x['val_loss'] for x in outputs]).mean()
+        tqdm_dict = {'val_loss_mean': val_loss_mean}
+        result = {'progress_bar': tqdm_dict, 'log': tqdm_dict, 'val_loss_mean': val_loss_mean}
+        return result
+
+
+    def test_epoch_end(self, outputs, prefix='test_'):
+        test_loss_mean = torch.stack([x['test_loss'] for x in outputs]).mean()
+        tqdm_dict = {'test_loss_mean': test_loss_mean}
+        result = {'progress_bar': tqdm_dict, 'log': tqdm_dict, 'test_loss_mean': test_loss_mean}
+        return result
 
     def configure_optimizers(self):
         optimizer = optim.SGD(
@@ -132,66 +135,105 @@ class ImageNetLightningModel(LightningModule):
         return [optimizer], [scheduler]
 
     def train_dataloader(self):
-        normalize = transforms.Normalize(
-            mean=[0.485, 0.456, 0.406],
-            std=[0.229, 0.224, 0.225],
-        )
+        ds_train = Vinmec(folder=self.hparams.data_path,
+                          is_train='train',
+                          fname='train.csv',
+                          types=self.hparams.types,
+                          pathology=self.hparams.pathology,
+                          resize=int(self.hparams.shape))
 
-        train_dir = os.path.join(self.hparams.data_path, 'train')
-        train_dataset = datasets.ImageFolder(
-            train_dir,
-            transforms.Compose([
-                transforms.RandomResizedCrop(224),
-                transforms.RandomHorizontalFlip(),
-                transforms.ToTensor(),
-                normalize,
-            ]))
-
-        if self.use_ddp:
-            train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset)
-        else:
-            train_sampler = None
-
-        train_loader = torch.utils.data.DataLoader(
-            dataset=train_dataset,
-            batch_size=self.hparams.batch_size,
-            shuffle=(train_sampler is None),
-            num_workers=0,
-            sampler=train_sampler
-        )
-        return train_loader
+        ds_train.reset_state()
+        ag_train = [
+            imgaug.Albumentations(AB.SmallestMaxSize(self.hparams.shape, p=1.0)), 
+            imgaug.ColorSpace(mode=cv2.COLOR_GRAY2RGB),
+            imgaug.RandomChooseAug([
+                imgaug.Albumentations(AB.Blur(blur_limit=4, p=0.25)),  
+                imgaug.Albumentations(AB.MotionBlur(blur_limit=4, p=0.25)),  
+                imgaug.Albumentations(AB.MedianBlur(blur_limit=4, p=0.25)),  
+            ]),
+            imgaug.Albumentations(AB.CLAHE(p=1.0)),
+            imgaug.RotationAndCropValid(max_deg=25),
+            imgaug.GoogleNetRandomCropAndResize(crop_area_fraction=(0.8, 1.0), 
+                    aspect_ratio_range=(0.8, 1.2),
+                    interp=cv2.INTER_AREA, target_shape=self.hparams.shape),
+            imgaug.ToFloat32(),
+        ]
+        ds_train = AugmentImageComponent(ds_train, ag_train, 0)
+        # Label smoothing
+        ag_label = [ 
+            imgaug.BrightnessScale((0.8, 1.2), clip=False),
+        ]
+        ds_train = BatchData(ds_train, self.hparams.batch, remainder=True)
+        ds_train = PrintData(ds_train)
+        if self.hparams.debug:
+            ds_train = FixedSizeData(ds_train, 2)
+        ds_train = MultiProcessRunner(ds_train, num_proc=2, num_prefetch=16)
+        ds_train = MapData(ds_train,
+                           lambda dp: [torch.tensor(np.transpose(dp[0], (0, 3, 1, 2)) ), 
+                                       torch.tensor(dp[1]).float() ])
+        return ds_train
 
     def val_dataloader(self):
-        normalize = transforms.Normalize(
-            mean=[0.485, 0.456, 0.406],
-            std=[0.229, 0.224, 0.225],
-        )
-        val_dir = os.path.join(self.hparams.data_path, 'val')
-        val_loader = torch.utils.data.DataLoader(
-            datasets.ImageFolder(val_dir, transforms.Compose([
-                transforms.Resize(256),
-                transforms.CenterCrop(224),
-                transforms.ToTensor(),
-                normalize,
-            ])),
-            batch_size=self.hparams.batch_size,
-            shuffle=False,
-            num_workers=0,
-        )
-        return val_loader
+        ds_valid = Vinmec(folder=self.hparams.data_path,
+                          is_train='valid',
+                          fname='valid.csv',
+                          types=self.hparams.types,
+                          pathology=self.hparams.pathology,
+                          resize=int(self.hparams.shape))
+
+        ds_valid.reset_state()
+        ag_valid = [
+            imgaug.Albumentations(AB.SmallestMaxSize(self.hparams.shape, p=1.0)),  
+            imgaug.ColorSpace(mode=cv2.COLOR_GRAY2RGB),
+            imgaug.Albumentations(AB.CLAHE(p=1)),
+            imgaug.ToFloat32(),
+        ]
+        ds_valid = AugmentImageComponent(ds_valid, ag_valid, 0)
+        ds_valid = BatchData(ds_valid, self.hparams.batch, remainder=True)
+        ds_valid = PrintData(ds_valid)
+        # ds_valid = MultiProcessRunner(ds_valid, num_proc=4, num_prefetch=16)
+        ds_valid = MapData(ds_valid,
+                           lambda dp: [torch.tensor(np.transpose(dp[0], (0, 3, 1, 2)) ), 
+                                       torch.tensor(dp[1]).float() ])
+        return ds_valid
+
+    def test_dataloader(self):
+        ds_test = Vinmec(folder=self.hparams.data_path,
+                          is_train='test',
+                          fname='test.csv',
+                          types=self.hparams.types,
+                          pathology=self.hparams.pathology,
+                          resize=int(self.hparams.shape))
+
+        ds_test.reset_state()
+        ag_test = [
+            imgaug.Albumentations(AB.SmallestMaxSize(self.hparams.shape, p=1.0)),  
+            iimgaug.ColorSpace(mode=cv2.COLOR_GRAY2RGB),
+            imgaug.Albumentations(AB.CLAHE(p=1)),
+            imgaug.ToFloat32(),
+        ]
+        ds_test = AugmentImageComponent(ds_test, ag_test, 0)
+        ds_test = BatchData(ds_test, self.hparams.batch, remainder=True)
+        ds_test = PrintData(ds_test)
+        # ds_test = MultiProcessRunner(ds_test, num_proc=4, num_prefetch=16)
+        ds_test = MapData(ds_test,
+                           lambda dp: [torch.tensor(np.transpose(dp[0], (0, 3, 1, 2)) ), 
+                                       torch.tensor(dp[1]).float() ])
+        return ds_test
+        
 
     @staticmethod
     def add_model_specific_args(parent_parser):  # pragma: no-cover
         parser = argparse.ArgumentParser(parents=[parent_parser])
-        parser.add_argument('-a', '--arch', metavar='ARCH', default='resnet18', choices=MODEL_NAMES,
+        parser.add_argument('-a', '--arch', metavar='ARCH', default='densenet121', choices=MODEL_NAMES,
                             help='model architecture: ' +
                                  ' | '.join(MODEL_NAMES) +
-                                 ' (default: resnet18)')
+                                 ' (default: densenet121)')
         parser.add_argument('--epochs', default=90, type=int, metavar='N',
                             help='number of total epochs to run')
         parser.add_argument('--seed', type=int, default=42,
                             help='seed for initializing training. ')
-        parser.add_argument('-b', '--batch-size', default=256, type=int,
+        parser.add_argument('-b', '--batch', default=64, type=int,
                             metavar='N',
                             help='mini-batch size (default: 256), this is the total '
                                  'batch size of all GPUs on the current node when '
@@ -205,6 +247,8 @@ class ImageNetLightningModel(LightningModule):
                             dest='weight_decay')
         parser.add_argument('--pretrained', dest='pretrained', action='store_true',
                             help='use pre-trained model')
+        parser.add_argument('--debug', action='store_true',
+                            help='use fast mode')
         return parser
 
 
@@ -223,6 +267,10 @@ def get_args():
     parent_parser.add_argument('--eval', action='store_true',
                                help='evaluate model on validation set')
 
+    parent_parser.add_argument('--types', type=int, default=1)
+    parent_parser.add_argument('--threshold', type=float, default=0.5)
+    parent_parser.add_argument('--pathology', default='Fracture')
+    parent_parser.add_argument('--shape', type=int, default=256)
     parser = ImageNetLightningModel.add_model_specific_args(parent_parser)
     return parser.parse_args()
 
@@ -238,7 +286,7 @@ def main(hparams):
         gpus=hparams.gpus,
         max_epochs=hparams.epochs,
         distributed_backend=hparams.distributed_backend,
-        use_amp=hparams.use_16bit
+        use_amp=hparams.use_16bit,
     )
     if hparams.eval:
         trainer.run_evaluation()
