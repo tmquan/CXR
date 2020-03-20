@@ -54,12 +54,20 @@ class ImageNetLightningModel(LightningModule):
             #     stride=(2, 2), padding=(3, 3), bias=False)
             self.model.classifier = nn.Sequential(
                 nn.Dropout(0.5),
-                nn.Linear(1024, self.hparams.types), # 5 diseases
+                nn.Linear(1024, self.hparams.types), #2 if self.hparams.types==1 else self.hparams.types), # 5 diseases
                 nn.Sigmoid(),
             )
+            # self.model.classifier = nn.Linear(1024, self.hparams.types)
         else:
             ValueError
-        self.criterion = torch.nn.BCEWithLogitsLoss(weight=None, size_average=True)
+        print(self.model)
+        # self.criterion = nn.MultiLabelSoftMarginLoss(weight=None, reduction='mean')
+        # self.criterion = nn.MultiLabelMarginLoss(reduction='mean')
+        # self.criterion = nn.L1Loss()
+        if self.hparams.types==1:
+            self.criterion = nn.BCELoss()
+        else:
+            self.criterion = nn.CrossEntropyLoss()
         self.average_type = 'binary' if self.hparams.types==1 else 'weighted'
         self.val_output = np.array([])
         self.val_target = np.array([])  
@@ -67,6 +75,7 @@ class ImageNetLightningModel(LightningModule):
         self.test_target = np.array([])
 
     def forward(self, x):
+        x = x / 128.0 - 1.0
         return (self.model(x))
 
     def training_step(self, batch, batch_idx, prefix=''):
@@ -94,9 +103,9 @@ class ImageNetLightningModel(LightningModule):
         if self.trainer.use_dp or self.trainer.use_ddp2:
             loss = loss.unsqueeze(0)
 
-        target = target.detach().to('cpu').numpy()
+        target = target.detach().cpu().numpy()
         self.val_target = np.concatenate((self.val_target, target), axis=0) if len(self.val_target) > 0 else target
-        output = output.detach().to('cpu').numpy()
+        output = output.detach().cpu().numpy()
         self.val_output = np.concatenate((self.val_output, output), axis=0) if len(self.val_output) > 0 else output
         
         result = OrderedDict({
@@ -104,26 +113,20 @@ class ImageNetLightningModel(LightningModule):
         })
         return result
 
-    def test_step(self, batch, batch_idx, prefix='test_'):
-        images, target = batch
-        output = self.forward(images)
-        loss = self.criterion(output, target)
-
-        # in DP mode (default) make sure if result is scalar, there's another dim in the beginning
-        if self.trainer.use_dp or self.trainer.use_ddp2:
-            loss = loss.unsqueeze(0)
-
-        result = OrderedDict({
-            'test_loss': loss,
-        })
-        return result
-
     def validation_epoch_end(self, outputs, prefix='val_'):
         self.val_output = (self.val_output > self.hparams.threshold).astype(np.float32)
         self.val_target = (self.val_target > self.hparams.threshold).astype(np.float32)
-        self.val_output = self.val_output[:,2]
-        self.val_target = self.val_target[:,2]
         # print(self.val_output.shape, self.val_target.shape)
+
+        pathologies = ["Airspace_Opacity", "Cardiomegaly", "Fracture", 
+                       "Lung_Lesion", "Pleural_Effusion", "Pneumothorax"]
+        if self.hparams.types==1:
+            pathology=0
+        else:
+            pathology = pathologies.index(self.hparams.pathology)
+        
+        self.val_output = self.val_output[:,pathology]
+        self.val_target = self.val_target[:,pathology]
         f1_score = sklearn.metrics.fbeta_score(self.val_target, self.val_output, beta=1, average=self.average_type)
         f2_score = sklearn.metrics.fbeta_score(self.val_target, self.val_output, beta=2, average=self.average_type)
         precision_score = sklearn.metrics.precision_score(self.val_target, self.val_output, average=self.average_type)
@@ -149,21 +152,67 @@ class ImageNetLightningModel(LightningModule):
         self.val_target = np.array([])  
         return result
 
+    def test_step(self, batch, batch_idx, prefix='test_'):
+        images, target = batch
+        output = self.forward(images)
+        loss = self.criterion(output, target)
+
+        # in DP mode (default) make sure if result is scalar, there's another dim in the beginning
+        if self.trainer.use_dp or self.trainer.use_ddp2:
+            loss = loss.unsqueeze(0)
+
+        target = target.detach().cpu().numpy()
+        self.test_target = np.concatenate((self.test_target, target), axis=0) if len(self.test_target) > 0 else target
+        output = output.detach().cpu().numpy()
+        self.test_output = np.concatenate((self.test_output, output), axis=0) if len(self.test_output) > 0 else output
+        
+        result = OrderedDict({
+            'test_loss': loss,
+        })
+        return result
 
     def test_epoch_end(self, outputs, prefix='test_'):
+        self.test_output = (self.test_output > self.hparams.threshold).astype(np.float32)
+        self.test_target = (self.test_target > self.hparams.threshold).astype(np.float32)
+        # print(self.test_output.shape, self.test_target.shape)
+
+        pathologies = ["Airspace_Opacity", "Cardiomegaly", "Fracture", 
+                       "Lung_Lesion", "Pleural_Effusion", "Pneumothorax"]
+        if self.hparams.types==1:
+            pathology=0
+        else:
+            pathology = pathologies.index(self.hparams.pathology)
+        
+        self.test_output = self.test_output[:,pathology]
+        self.test_target = self.test_target[:,pathology]
+        f1_score = sklearn.metrics.fbeta_score(self.test_target, self.test_output, beta=1, average=self.average_type)
+        f2_score = sklearn.metrics.fbeta_score(self.test_target, self.test_output, beta=2, average=self.average_type)
+        precision_score = sklearn.metrics.precision_score(self.test_target, self.test_output, average=self.average_type)
+        recall_score = sklearn.metrics.recall_score(self.test_target, self.test_output, average=self.average_type)
+
         test_loss_mean = torch.stack([x['test_loss'] for x in outputs]).mean()
-        tqdm_dict = {'test_loss_mean': test_loss_mean}
-        result = {'progress_bar': tqdm_dict, 'log': tqdm_dict, 'test_loss_mean': test_loss_mean}
+        tqdm_dict = {'test_loss': test_loss_mean, 
+                     'test_f1_score': f1_score,
+                     'test_f2_score': f2_score,
+                     'test_precision_score': precision_score,
+                     'test_recall_score': recall_score,
+                     }
+        result = {'progress_bar': tqdm_dict, 
+                  'log': tqdm_dict, 
+                  'test_loss': test_loss_mean,
+                  'test_f1_score': f1_score,
+                  'test_f2_score': f2_score,
+                  'test_precision_score': precision_score,
+                  'test_recall_score': recall_score,}
+        # print(self.test_output.max(), self.test_target.max())
+        # Reset the result
+        self.test_output = np.array([])
+        self.test_target = np.array([])  
         return result
 
     def configure_optimizers(self):
-        optimizer = optim.SGD(
-            self.parameters(),
-            lr=self.hparams.lr,
-            momentum=self.hparams.momentum,
-            weight_decay=self.hparams.weight_decay
-        )
-        scheduler = lr_scheduler.ExponentialLR(optimizer, gamma=0.1)
+        optimizer = optim.Adam(self.parameters(), lr=self.hparams.lr)
+        scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=10)
         return [optimizer], [scheduler]
 
     def train_dataloader(self):
@@ -187,7 +236,8 @@ class ImageNetLightningModel(LightningModule):
             imgaug.RotationAndCropValid(max_deg=25),
             imgaug.GoogleNetRandomCropAndResize(crop_area_fraction=(0.8, 1.0), 
                     aspect_ratio_range=(0.8, 1.2),
-                    interp=cv2.INTER_AREA, target_shape=self.hparams.shape),
+                    interp=cv2.INTER_AREA, 
+                    target_shape=self.hparams.shape),
             imgaug.ToFloat32(),
         ]
         ds_train = AugmentImageComponent(ds_train, ag_train, 0)
@@ -200,7 +250,7 @@ class ImageNetLightningModel(LightningModule):
         ds_train = PrintData(ds_train)
         if self.hparams.debug:
             ds_train = FixedSizeData(ds_train, 2)
-        ds_train = MultiProcessRunner(ds_train, num_proc=4, num_prefetch=16)
+        ds_train = MultiProcessRunner(ds_train, num_proc=8, num_prefetch=16)
         ds_train = MapData(ds_train,
                            lambda dp: [torch.tensor(np.transpose(dp[0], (0, 3, 1, 2)) ), 
                                        torch.tensor(dp[1]).float() ])
@@ -232,7 +282,7 @@ class ImageNetLightningModel(LightningModule):
 
     def test_dataloader(self):
         ds_test = Vinmec(folder=self.hparams.data_path,
-                          is_train='test',
+                          is_train='valid',
                           fname='test.csv',
                           types=self.hparams.types,
                           pathology=self.hparams.pathology,
@@ -241,7 +291,7 @@ class ImageNetLightningModel(LightningModule):
         ds_test.reset_state()
         ag_test = [
             imgaug.Albumentations(AB.SmallestMaxSize(self.hparams.shape, p=1.0)),  
-            iimgaug.ColorSpace(mode=cv2.COLOR_GRAY2RGB),
+            imgaug.ColorSpace(mode=cv2.COLOR_GRAY2RGB),
             imgaug.Albumentations(AB.CLAHE(p=1)),
             imgaug.ToFloat32(),
         ]
@@ -253,25 +303,24 @@ class ImageNetLightningModel(LightningModule):
                            lambda dp: [torch.tensor(np.transpose(dp[0], (0, 3, 1, 2)) ), 
                                        torch.tensor(dp[1]).float() ])
         return ds_test
-        
 
     @staticmethod
     def add_model_specific_args(parent_parser):  # pragma: no-cover
         parser = argparse.ArgumentParser(parents=[parent_parser])
-        parser.add_argument('-a', '--arch', metavar='ARCH', default='densenet121', choices=MODEL_NAMES,
+        parser.add_argument('--arch', metavar='ARCH', default='densenet121', choices=MODEL_NAMES,
                             help='model architecture: ' +
                                  ' | '.join(MODEL_NAMES) +
                                  ' (default: densenet121)')
         parser.add_argument('--epochs', default=90, type=int, metavar='N',
                             help='number of total epochs to run')
-        parser.add_argument('--seed', type=int, default=42,
+        parser.add_argument('--seed', type=int, default=2222,
                             help='seed for initializing training. ')
-        parser.add_argument('-b', '--batch', default=32, type=int,
+        parser.add_argument('--batch', default=64, type=int,
                             metavar='N',
                             help='mini-batch size (default: 256), this is the total '
                                  'batch size of all GPUs on the current node when '
                                  'using Data Parallel or Distributed Data Parallel')
-        parser.add_argument('--lr', '--learning-rate', default=0.1, type=float,
+        parser.add_argument('--lr', '--learning-rate', default=1e-4, type=float,
                             metavar='LR', help='initial learning rate', dest='lr')
         parser.add_argument('--momentum', default=0.9, type=float, metavar='M',
                             help='momentum')
@@ -289,7 +338,7 @@ def get_args():
     parent_parser = argparse.ArgumentParser(add_help=False)
     parent_parser.add_argument('--data_path', metavar='DIR', default=".", type=str,
                                help='path to dataset')
-    parent_parser.add_argument('--save_path', metavar='DIR', default="checkpoints", type=str,
+    parent_parser.add_argument('--save_path', metavar='DIR', default=".", type=str,
                                help='path to save output')
     parent_parser.add_argument('--info_path', metavar='DIR', default="train_log_pytorch", 
                                help='path to logging output')
@@ -299,15 +348,16 @@ def get_args():
                                help='supports three options dp, ddp, ddp2')
     parent_parser.add_argument('--use-16bit', dest='use_16bit', action='store_true',
                                help='if true uses 16 bit precision')
-    parent_parser.add_argument('--val_check_interval', default=0., type=float, 
-                               help="float/int. If float, % of tng epoch. If int, check every n batch")
-    
+    parent_parser.add_argument('--fast_dev_run',
+                               default=False, action='store_true',
+                               help='fast_dev_run: runs 1 batch of train, test, val (ie: a unit test)')
+
     parent_parser.add_argument('--types', type=int, default=1)
     parent_parser.add_argument('--threshold', type=float, default=0.5)
     parent_parser.add_argument('--pathology', default='Fracture')
     parent_parser.add_argument('--shape', type=int, default=320)
+
     # Inference purpose
-    # parent_parser.add_argument('--load', help='load model')
     parent_parser.add_argument('--load', action='store_true', 
                                help='path to logging output')
     parent_parser.add_argument('--pred', action='store_true', help='run predict')
@@ -329,31 +379,22 @@ def main(hparams):
         torch.backends.cudnn.deterministic = True
         torch.backends.cudnn.benchmark = False
 
-    checkpoint_callback = ModelCheckpoint(
-        filepath=hparams.save_path,
-        save_top_k=10,
-        verbose=True,
-        monitor='val_f1_score',  # TODO
-        mode='max',
-        prefix=''
-    )
+
 
     trainer = pl.Trainer(
-        # nb_sanity_val_steps=10,
         default_save_path=hparams.save_path,
         gpus=hparams.gpus,
         max_epochs=hparams.epochs,
-        checkpoint_callback=checkpoint_callback,
         early_stop_callback=None,
         distributed_backend=hparams.distributed_backend,
         use_amp=hparams.use_16bit,
-        val_check_interval=hparams.val_check_interval,
+        fast_dev_run=hparams.fast_dev_run,
     )
     if hparams.eval:
         trainer.run_evaluation()
     else:
         trainer.fit(model)
-
+        trainer.test()
 
 if __name__ == '__main__':
     main(get_args())

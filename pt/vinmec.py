@@ -111,6 +111,7 @@ class Vinmec(df.RNGDataFlow):
                 elif self.types == 1:
                     assert self.pathology is not None
                     label.append(self.df.iloc[idx][self.pathology])
+                    # label.append(self.df.iloc[idx][1-self.pathology])
                 else:
                     pass
                 # Try catch exception
