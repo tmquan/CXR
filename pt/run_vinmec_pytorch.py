@@ -32,6 +32,7 @@ import albumentations as AB
 import cv2 
 import numpy as np
 
+import sklearn.metrics
 from vinmec import Vinmec
 # pull out resnet names from torchvision models
 MODEL_NAMES = sorted(
@@ -53,18 +54,20 @@ class ImageNetLightningModel(LightningModule):
             #     stride=(2, 2), padding=(3, 3), bias=False)
             self.model.classifier = nn.Sequential(
                 nn.Dropout(0.5),
-                nn.Linear(1024, self.hparams.types) # 5 diseases
+                nn.Linear(1024, self.hparams.types), # 5 diseases
+                nn.Sigmoid(),
             )
         else:
             ValueError
         self.criterion = torch.nn.BCEWithLogitsLoss(weight=None, size_average=True)
+        self.average_type = 'binary' if self.hparams.types==1 else 'weighted'
         self.val_output = np.array([])
         self.val_target = np.array([])  
         self.test_output = np.array([])
         self.test_target = np.array([])
 
     def forward(self, x):
-        return self.model(x)
+        return (self.model(x))
 
     def training_step(self, batch, batch_idx, prefix=''):
         images, target = batch
@@ -82,7 +85,6 @@ class ImageNetLightningModel(LightningModule):
         })
         return result
 
-
     def validation_step(self, batch, batch_idx, prefix='val_'):
         images, target = batch
         output = self.forward(images)
@@ -92,6 +94,11 @@ class ImageNetLightningModel(LightningModule):
         if self.trainer.use_dp or self.trainer.use_ddp2:
             loss = loss.unsqueeze(0)
 
+        target = target.detach().to('cpu').numpy()
+        self.val_target = np.concatenate((self.val_target, target), axis=0) if len(self.val_target) > 0 else target
+        output = output.detach().to('cpu').numpy()
+        self.val_output = np.concatenate((self.val_output, output), axis=0) if len(self.val_output) > 0 else output
+        
         result = OrderedDict({
             'val_loss': loss,
         })
@@ -112,9 +119,34 @@ class ImageNetLightningModel(LightningModule):
         return result
 
     def validation_epoch_end(self, outputs, prefix='val_'):
+        self.val_output = (self.val_output > self.hparams.threshold).astype(np.float32)
+        self.val_target = (self.val_target > self.hparams.threshold).astype(np.float32)
+        self.val_output = self.val_output[:,2]
+        self.val_target = self.val_target[:,2]
+        # print(self.val_output.shape, self.val_target.shape)
+        f1_score = sklearn.metrics.fbeta_score(self.val_target, self.val_output, beta=1, average=self.average_type)
+        f2_score = sklearn.metrics.fbeta_score(self.val_target, self.val_output, beta=2, average=self.average_type)
+        precision_score = sklearn.metrics.precision_score(self.val_target, self.val_output, average=self.average_type)
+        recall_score = sklearn.metrics.recall_score(self.val_target, self.val_output, average=self.average_type)
+
         val_loss_mean = torch.stack([x['val_loss'] for x in outputs]).mean()
-        tqdm_dict = {'val_loss_mean': val_loss_mean}
-        result = {'progress_bar': tqdm_dict, 'log': tqdm_dict, 'val_loss_mean': val_loss_mean}
+        tqdm_dict = {'val_loss': val_loss_mean, 
+                     'val_f1_score': f1_score,
+                     'val_f2_score': f2_score,
+                     'val_precision_score': precision_score,
+                     'val_recall_score': recall_score,
+                     }
+        result = {'progress_bar': tqdm_dict, 
+                  'log': tqdm_dict, 
+                  'val_loss': val_loss_mean,
+                  'val_f1_score': f1_score,
+                  'val_f2_score': f2_score,
+                  'val_precision_score': precision_score,
+                  'val_recall_score': recall_score,}
+        # print(self.val_output.max(), self.val_target.max())
+        # Reset the result
+        self.val_output = np.array([])
+        self.val_target = np.array([])  
         return result
 
 
@@ -163,11 +195,12 @@ class ImageNetLightningModel(LightningModule):
         ag_label = [ 
             imgaug.BrightnessScale((0.8, 1.2), clip=False),
         ]
+        # ds_train = AugmentImageComponent(ds_train, ag_label, 1)
         ds_train = BatchData(ds_train, self.hparams.batch, remainder=True)
         ds_train = PrintData(ds_train)
         if self.hparams.debug:
             ds_train = FixedSizeData(ds_train, 2)
-        ds_train = MultiProcessRunner(ds_train, num_proc=2, num_prefetch=16)
+        ds_train = MultiProcessRunner(ds_train, num_proc=4, num_prefetch=16)
         ds_train = MapData(ds_train,
                            lambda dp: [torch.tensor(np.transpose(dp[0], (0, 3, 1, 2)) ), 
                                        torch.tensor(dp[1]).float() ])
@@ -233,7 +266,7 @@ class ImageNetLightningModel(LightningModule):
                             help='number of total epochs to run')
         parser.add_argument('--seed', type=int, default=42,
                             help='seed for initializing training. ')
-        parser.add_argument('-b', '--batch', default=64, type=int,
+        parser.add_argument('-b', '--batch', default=32, type=int,
                             metavar='N',
                             help='mini-batch size (default: 256), this is the total '
                                  'batch size of all GPUs on the current node when '
@@ -256,21 +289,31 @@ def get_args():
     parent_parser = argparse.ArgumentParser(add_help=False)
     parent_parser.add_argument('--data_path', metavar='DIR', default=".", type=str,
                                help='path to dataset')
-    parent_parser.add_argument('--save_path', metavar='DIR', default=".", type=str,
+    parent_parser.add_argument('--save_path', metavar='DIR', default="checkpoints", type=str,
                                help='path to save output')
+    parent_parser.add_argument('--info_path', metavar='DIR', default="train_log_pytorch", 
+                               help='path to logging output')
     parent_parser.add_argument('--gpus', type=int, default=1,
                                help='how many gpus')
     parent_parser.add_argument('--distributed-backend', type=str, default='dp', choices=('dp', 'ddp', 'ddp2'),
                                help='supports three options dp, ddp, ddp2')
     parent_parser.add_argument('--use-16bit', dest='use_16bit', action='store_true',
                                help='if true uses 16 bit precision')
-    parent_parser.add_argument('--eval', action='store_true',
-                               help='evaluate model on validation set')
-
+    parent_parser.add_argument('--val_check_interval', default=0., type=float, 
+                               help="float/int. If float, % of tng epoch. If int, check every n batch")
+    
     parent_parser.add_argument('--types', type=int, default=1)
     parent_parser.add_argument('--threshold', type=float, default=0.5)
     parent_parser.add_argument('--pathology', default='Fracture')
-    parent_parser.add_argument('--shape', type=int, default=256)
+    parent_parser.add_argument('--shape', type=int, default=320)
+    # Inference purpose
+    # parent_parser.add_argument('--load', help='load model')
+    parent_parser.add_argument('--load', action='store_true', 
+                               help='path to logging output')
+    parent_parser.add_argument('--pred', action='store_true', help='run predict')
+    parent_parser.add_argument('--eval', action='store_true', help='run offline evaluation instead of training')
+    
+    
     parser = ImageNetLightningModel.add_model_specific_args(parent_parser)
     return parser.parse_args()
 
@@ -279,14 +322,32 @@ def main(hparams):
     model = ImageNetLightningModel(hparams)
     if hparams.seed is not None:
         random.seed(hparams.seed)
+        np.random.seed(hparams.seed)
         torch.manual_seed(hparams.seed)
-        cudnn.deterministic = True
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed_all(hparams.seed)
+        torch.backends.cudnn.deterministic = True
+        torch.backends.cudnn.benchmark = False
+
+    checkpoint_callback = ModelCheckpoint(
+        filepath=hparams.save_path,
+        save_top_k=10,
+        verbose=True,
+        monitor='val_f1_score',  # TODO
+        mode='max',
+        prefix=''
+    )
+
     trainer = pl.Trainer(
+        # nb_sanity_val_steps=10,
         default_save_path=hparams.save_path,
         gpus=hparams.gpus,
         max_epochs=hparams.epochs,
+        checkpoint_callback=checkpoint_callback,
+        early_stop_callback=None,
         distributed_backend=hparams.distributed_backend,
         use_amp=hparams.use_16bit,
+        val_check_interval=hparams.val_check_interval,
     )
     if hparams.eval:
         trainer.run_evaluation()
