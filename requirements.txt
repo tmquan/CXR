@@ -118,7 +118,7 @@ locket==0.2.0
 lxml==4.2.6
 Markdown==3.1.1
 MarkupSafe==1.1.1
-marshmallow==2.6.1
+marshmallow==2.15.1
 marshmallow-jsonapi==0.15.1
 matplotlib==3.0.3
 mccabe==0.6.1
