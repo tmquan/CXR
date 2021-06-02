@@ -265,7 +265,7 @@ tqdm==4.35.0
 traitlets==4.3.3
 twine==1.13.0
 unicodecsv==0.14.1
-urllib3==1.23
+urllib3==1.26.5
 vcrpy==4.0.2
 virtualenv==16.7.9
 wandb==0.8.21
